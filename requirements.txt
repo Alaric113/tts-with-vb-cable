@@ -1,0 +1,11 @@
+customtkinter
+pynput
+sounddevice
+pydub
+edge-tts
+pyttsx3
+numpy
+# Windows-specific libraries
+comtypes; platform_system == "Windows"
+pywin32; platform_system == "Windows"
+pyinstaller; platform_system == "Windows"

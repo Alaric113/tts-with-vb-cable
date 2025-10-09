@@ -1,5 +1,5 @@
 {
-    "hotkey": "<shift>+z",
+    "hotkey": "`",
     "engine": "edge-tts",
     "edge_voice": "zh-CN-XiaoxiaoNeural",
     "pyttsx3_voice_id": null,

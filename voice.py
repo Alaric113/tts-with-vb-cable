@@ -14,6 +14,7 @@ import shutil
 import zipfile
 import subprocess
 import time
+import ctypes
 from datetime import datetime
 
 # 外部庫
@@ -43,7 +44,16 @@ except ImportError:
 # =================================================================
 # 基本設定
 # =================================================================
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+def get_base_path():
+    """ 取得資源檔的基準路徑，適用於開發環境和 PyInstaller 打包環境 """
+    if getattr(sys, 'frozen', False):
+        # 如果在 PyInstaller 包中執行
+        return os.path.dirname(sys.executable)
+    else:
+        # 在正常的 Python 環境中執行
+        return os.path.dirname(os.path.abspath(__file__))
+
+SCRIPT_DIR = get_base_path()
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 CABLE_OUTPUT_HINT = "CABLE Input"
 CABLE_INPUT_HINT = "CABLE Output"
@@ -72,6 +82,14 @@ FFMPEG_DOWNLOAD_SOURCES = [
     },
 ]
 
+VB_CABLE_DOWNLOAD_URL = "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack43.zip"
+
+def _extract_zip(zip_path: str, target_dir: str, progress_cb=None):
+    _ensure_dir(target_dir)
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        zf.extractall(target_dir)
+    if progress_cb:
+        progress_cb(1.0, "解壓縮完成。")
 # =================================================================
 # 依賴助手工具函式
 # =================================================================
@@ -212,19 +230,25 @@ class LocalTTSPlayer:
         
         self._hotkey_recording_listener = None
         self._pressed_keys = set()
-
+        
         # 先顯示主視窗
-        ctk.set_appearance_mode("System")
-        ctk.set_default_color_theme("blue")
+        ctk.set_appearance_mode("System") # System, Dark, Light
         self._build_ui()
-
+        
         # 載入設定
         self._load_config()
         self.current_engine = self._config.get("engine", ENGINE_EDGE)
         self.edge_voice = self._config.get("voice", DEFAULT_EDGE_VOICE)
         self.tts_rate = self._config.get("rate", 175)
         self.tts_volume = self._config.get("volume", 1.0)
+        
+        # 先從設定檔更新變數
         self.current_hotkey = self._normalize_hotkey(self._config.get("hotkey", "<shift>+z"))
+        # 立即更新 UI 上的快捷鍵顯示
+        self.hotkey_entry.delete(0, tk.END)
+        self.hotkey_entry.insert(0, self.current_hotkey)
+        # 在填入值之後才禁用輸入框
+        self.hotkey_entry.configure(state="disabled")
 
         # 背景執行檢查流程（先 Log 檢查，再需要時才詢問）
         threading.Thread(target=self._dependency_flow_thread, daemon=True).start()
@@ -232,106 +256,116 @@ class LocalTTSPlayer:
     # ================ UI 建構與進度列 =================
     def _build_ui(self):
         self.root = ctk.CTk()
-        self.root.title("TTS 虛擬麥克風控制器 (VB-CABLE)")
-        self.root.geometry("600x690")
+        self.root.title("TTS 虛擬麥克風控制器")
+        self.root.geometry("620x720")
         self.root.resizable(False, False)
         
-        # 使用 Grid 佈局，並設定日誌行(row 6)和主列(column 0)可縮放
-        self.root.grid_rowconfigure(7, weight=1)
+        # --- 全域 UI 設定 ---
+        CORNER_RADIUS = 12
+        PAD_X = 20
+        PAD_Y = 10
+        
+        # --- 顏色定義 ---
+        FG_COLOR = ("#FFFFFF", "#333333")
+        self.BORDER_COLOR = ("#E0E0E0", "#404040")
+        self.BTN_COLOR = "#708090"  # 沉穩的藍灰色 (Slate Gray)
+        self.BTN_HOVER_COLOR = "#5D6D7E" # 按下時的深色版本
+        
+        # 使用 Grid 佈局，並設定日誌行(row 7)和主列(column 0)可縮放
+        self.root.grid_rowconfigure(6, weight=1) # 將權重行改為第 6 行
         self.root.grid_columnconfigure(0, weight=1)
 
         # --- 改為純 Grid 佈局 ---
-        ctrl = ctk.CTkFrame(self.root)
-        ctrl.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
+        ctrl = ctk.CTkFrame(self.root, corner_radius=CORNER_RADIUS, fg_color=FG_COLOR, border_color=self.BORDER_COLOR, border_width=1)
+        ctrl.grid(row=0, column=0, sticky="ew", padx=PAD_X, pady=(20, PAD_Y))
 
-        self.start_button = ctk.CTkButton(ctrl, text="啟動", command=self.start_local_player)
-        self.start_button.grid(row=0, column=0, padx=10, pady=10)
+        self.start_button = ctk.CTkButton(ctrl, text="▶ 啟動", command=self.start_local_player, corner_radius=CORNER_RADIUS, fg_color=self.BTN_COLOR, hover_color=self.BTN_HOVER_COLOR)
+        self.start_button.grid(row=0, column=0, padx=15, pady=15)
 
-        self.stop_button = ctk.CTkButton(ctrl, text="停止", command=self.stop_local_player, state="disabled", fg_color="red")
-        self.stop_button.grid(row=0, column=1, padx=10, pady=10)
+        self.stop_button = ctk.CTkButton(ctrl, text="■ 停止", command=self.stop_local_player, state="disabled", fg_color="#D32F2F", hover_color="#B71C1C", corner_radius=CORNER_RADIUS)
+        self.stop_button.grid(row=0, column=1, padx=15, pady=15)
 
-        self.status_label = ctk.CTkLabel(ctrl, text="狀態: 未啟動", text_color="red")
-        self.status_label.grid(row=0, column=2, padx=10)
-        ctrl.columnconfigure(2, weight=1) # 讓狀態標籤靠右
+        self.status_label = ctk.CTkLabel(ctrl, text="● 未啟動", text_color=["#D32F2F", "#FF5252"], font=ctk.CTkFont(size=14, weight="bold"))
+        self.status_label.grid(row=0, column=2, padx=20, sticky="e")
+        ctrl.grid_columnconfigure(2, weight=1) # 讓狀態標籤靠右
 
-        out = ctk.CTkFrame(self.root)
-        out.grid(row=1, column=0, sticky="ew", padx=20, pady=10)
+        out = ctk.CTkFrame(self.root, corner_radius=CORNER_RADIUS, fg_color=FG_COLOR, border_color=self.BORDER_COLOR, border_width=1)
+        out.grid(row=1, column=0, sticky="ew", padx=PAD_X, pady=PAD_Y)
 
-        ctk.CTkLabel(out, text="輸出設備:", anchor="w").grid(row=0, column=0, padx=10, pady=5, sticky="w")
-        self.local_device_combo = ctk.CTkOptionMenu(out, values=["Default"])
+        ctk.CTkLabel(out, text="輸出設備:", anchor="w").grid(row=0, column=0, padx=15, pady=10, sticky="w")
+        self.local_device_combo = ctk.CTkOptionMenu(out, values=["Default"], corner_radius=CORNER_RADIUS, fg_color=FG_COLOR, button_color=self.BTN_COLOR, button_hover_color=self.BTN_HOVER_COLOR)
         self.local_device_combo.set("Default")
         self.local_device_combo.configure(state="disabled")
-        self.local_device_combo.grid(row=0, column=1, sticky="ew", padx=10, pady=5)
+        self.local_device_combo.grid(row=0, column=1, sticky="ew", padx=15, pady=10)
 
-        ctk.CTkLabel(out, text=f"Discord 麥克風請設定為: {CABLE_INPUT_HINT} (虛擬麥克風)", text_color="cyan", font=ctk.CTkFont(size=12, weight="bold")).grid(row=1, column=0, columnspan=2, padx=10, pady=5, sticky="w")
-        out.columnconfigure(1, weight=1)
+        ctk.CTkLabel(out, text=f"💡 Discord 麥克風請設定為: {CABLE_INPUT_HINT}", text_color=["#007BFF", "#1E90FF"], font=ctk.CTkFont(size=12, weight="bold")).grid(row=1, column=0, columnspan=2, padx=15, pady=(5, 10), sticky="w")
+        out.grid_columnconfigure(1, weight=1)
 
-        sel = ctk.CTkFrame(self.root)
-        sel.grid(row=2, column=0, sticky="ew", padx=20, pady=10)
+        sel = ctk.CTkFrame(self.root, corner_radius=CORNER_RADIUS, fg_color=FG_COLOR, border_color=self.BORDER_COLOR, border_width=1)
+        sel.grid(row=2, column=0, sticky="ew", padx=PAD_X, pady=PAD_Y)
 
-        ctk.CTkLabel(sel, text="引擎:").grid(row=0, column=0, padx=10, pady=5, sticky="w")
-        self.engine_combo = ctk.CTkOptionMenu(sel, values=[ENGINE_EDGE, ENGINE_PYTTX3], command=self._on_engine_change)
+        ctk.CTkLabel(sel, text="TTS 引擎:").grid(row=0, column=0, padx=15, pady=10, sticky="w")
+        self.engine_combo = ctk.CTkOptionMenu(sel, values=[ENGINE_EDGE, ENGINE_PYTTX3], command=self._on_engine_change, corner_radius=CORNER_RADIUS, fg_color=FG_COLOR, button_color=self.BTN_COLOR, button_hover_color=self.BTN_HOVER_COLOR)
         self.engine_combo.set(self.current_engine)
-        self.engine_combo.grid(row=0, column=1, sticky="ew", padx=10, pady=5)
+        self.engine_combo.grid(row=0, column=1, sticky="ew", padx=15, pady=10)
 
-        ctk.CTkLabel(sel, text="語音:").grid(row=1, column=0, padx=10, pady=5, sticky="w")
-        self.voice_combo = ctk.CTkOptionMenu(sel, values=[DEFAULT_EDGE_VOICE], command=self._on_voice_change)
-        self.voice_combo.grid(row=1, column=1, sticky="ew", padx=10, pady=5)
-        sel.columnconfigure(1, weight=1)
+        ctk.CTkLabel(sel, text="語音聲線:").grid(row=1, column=0, padx=15, pady=10, sticky="w")
+        self.voice_combo = ctk.CTkOptionMenu(sel, values=[DEFAULT_EDGE_VOICE], command=self._on_voice_change, corner_radius=CORNER_RADIUS, fg_color=FG_COLOR, button_color=self.BTN_COLOR, button_hover_color=self.BTN_HOVER_COLOR)
+        self.voice_combo.grid(row=1, column=1, sticky="ew", padx=15, pady=10)
+        sel.grid_columnconfigure(1, weight=1)
 
-        tts = ctk.CTkFrame(self.root)
-        tts.grid(row=3, column=0, sticky="ew", padx=20, pady=10)
+        tts = ctk.CTkFrame(self.root, corner_radius=CORNER_RADIUS, fg_color=FG_COLOR, border_color=self.BORDER_COLOR, border_width=1)
+        tts.grid(row=3, column=0, sticky="ew", padx=PAD_X, pady=PAD_Y)
 
-        ctk.CTkLabel(tts, text="語速:", width=100).grid(row=0, column=0, padx=10, sticky="w")
-        self.speed_slider = ctk.CTkSlider(tts, from_=100, to=250, command=self.update_tts_settings)
+        ctk.CTkLabel(tts, text="語速:", width=100).grid(row=0, column=0, padx=15, pady=(15, 5), sticky="w")
+        self.speed_slider = ctk.CTkSlider(tts, from_=100, to=250, command=self.update_tts_settings, button_color=self.BTN_COLOR, button_hover_color=self.BTN_HOVER_COLOR, progress_color=self.BTN_COLOR)
         self.speed_slider.set(self.tts_rate)
-        self.speed_slider.grid(row=0, column=1, sticky="ew", padx=10)
+        self.speed_slider.grid(row=0, column=1, sticky="ew", padx=15, pady=(15, 5))
         self.speed_value_label = ctk.CTkLabel(tts, text=f"{self.tts_rate}", width=50)
-        self.speed_value_label.grid(row=0, column=2, sticky="e", padx=10)
+        self.speed_value_label.grid(row=0, column=2, sticky="e", padx=15, pady=(15, 5))
 
-        ctk.CTkLabel(tts, text="音量:", width=100).grid(row=1, column=0, padx=10, sticky="w")
-        self.volume_slider = ctk.CTkSlider(tts, from_=0.5, to=1.0, command=self.update_tts_settings)
+        ctk.CTkLabel(tts, text="音量:", width=100).grid(row=1, column=0, padx=15, pady=(5, 15), sticky="w")
+        self.volume_slider = ctk.CTkSlider(tts, from_=0.5, to=1.0, command=self.update_tts_settings, button_color=self.BTN_COLOR, button_hover_color=self.BTN_HOVER_COLOR, progress_color=self.BTN_COLOR)
         self.volume_slider.set(self.tts_volume)
-        self.volume_slider.grid(row=1, column=1, sticky="ew", padx=10)
+        self.volume_slider.grid(row=1, column=1, sticky="ew", padx=15, pady=(5, 15))
         self.volume_value_label = ctk.CTkLabel(tts, text=f"{self.tts_volume:.2f}", width=50)
-        self.volume_value_label.grid(row=1, column=2, sticky="e", padx=10)
-        tts.columnconfigure(1, weight=1)
+        self.volume_value_label.grid(row=1, column=2, sticky="e", padx=15, pady=(5, 15))
+        tts.grid_columnconfigure(1, weight=1)
 
-        hotkey_frame = ctk.CTkFrame(self.root)
-        hotkey_frame.grid(row=4, column=0, sticky="ew", padx=20, pady=10)
+        hotkey_frame = ctk.CTkFrame(self.root, corner_radius=CORNER_RADIUS, fg_color=FG_COLOR, border_color=self.BORDER_COLOR, border_width=1)
+        hotkey_frame.grid(row=4, column=0, sticky="ew", padx=PAD_X, pady=PAD_Y)
 
-        ctk.CTkLabel(hotkey_frame, text="全域快捷鍵:").grid(row=0, column=0, padx=10, sticky="w")
-        self.hotkey_entry = ctk.CTkEntry(hotkey_frame)
-        self.hotkey_entry.insert(0, self.current_hotkey)
-        self.hotkey_entry.configure(state="disabled")
-        self.hotkey_entry.grid(row=0, column=1, sticky="ew", padx=5)
+        ctk.CTkLabel(hotkey_frame, text="快捷鍵:").grid(row=0, column=0, padx=15, pady=15, sticky="w")
+        self.hotkey_entry = ctk.CTkEntry(hotkey_frame, corner_radius=CORNER_RADIUS, border_color=self.BORDER_COLOR)
+        self.hotkey_entry.grid(row=0, column=1, sticky="ew", padx=10, pady=15)
         self.hotkey_entry.bind("<Return>", self._on_hotkey_change_entry)
 
-        self.hotkey_edit_button = ctk.CTkButton(hotkey_frame, text="編輯", width=120, command=self._toggle_hotkey_edit)
-        self.hotkey_edit_button.grid(row=0, column=2, sticky="e", padx=10)
-        hotkey_frame.columnconfigure(1, weight=1)
+        self.hotkey_edit_button = ctk.CTkButton(hotkey_frame, text="✏️ 編輯", width=120, command=self._toggle_hotkey_edit, corner_radius=CORNER_RADIUS, fg_color=self.BTN_COLOR, hover_color=self.BTN_HOVER_COLOR)
+        self.hotkey_edit_button.grid(row=0, column=2, sticky="e", padx=15, pady=15)
+        hotkey_frame.grid_columnconfigure(1, weight=1)
 
         info = ctk.CTkFrame(self.root, fg_color="transparent")
-        info.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 10))
-        ctk.CTkLabel(info, text="點擊 '編輯' 後，按下您想設定的組合鍵 (按 Esc 可取消錄製)。", font=ctk.CTkFont(size=10)).pack(pady=2, fill="x")
+        info.grid(row=5, column=0, sticky="ew", padx=PAD_X, pady=(0, PAD_Y))
+        ctk.CTkLabel(info, text="點擊 '編輯' 後，按下想設定的組合鍵 (按 Esc 可取消)。", font=ctk.CTkFont(size=11), text_color="gray").pack(pady=0, fill="x")
 
         # 下載進度列
-        dl_frame = ctk.CTkFrame(self.root)
-        dl_frame.grid(row=6, column=0, sticky="ew", padx=20, pady=10)
-        self.download_bar = ctk.CTkProgressBar(dl_frame)
+        dl_frame = ctk.CTkFrame(self.root, fg_color="transparent")
+        dl_frame.grid(row=6, column=0, sticky="sew", padx=PAD_X, pady=(0, PAD_Y)) # 讓它貼在底部
+        self.download_bar = ctk.CTkProgressBar(dl_frame, corner_radius=CORNER_RADIUS, progress_color=self.BTN_COLOR)
         self.download_bar.set(0.0)
-        self.download_bar.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 2))
+        self.download_bar.pack(fill="x", expand=False, pady=(8, 2))
         self.download_label = ctk.CTkLabel(dl_frame, text="", anchor="w", font=ctk.CTkFont(family="Consolas"))
-        self.download_label.grid(row=1, column=0, sticky="w", padx=10, pady=(0, 8))
-        dl_frame.columnconfigure(0, weight=1)
+        self.download_label.pack(fill="x", expand=False)
         self._toggle_download_ui(False)
 
-        log = ctk.CTkFrame(self.root)
-        log.grid(row=6, column=0, sticky="nsew", padx=20, pady=(0, 14))
-        self.log_text = ctk.CTkTextbox(log, font=("Consolas", 12)) # 移除固定的 height=8
-        self.log_text.pack(fill="both", expand=True, padx=10, pady=10)
+        # 日誌區域
+        log = ctk.CTkFrame(self.root, corner_radius=CORNER_RADIUS, fg_color=FG_COLOR, border_color=self.BORDER_COLOR, border_width=1)
+        log.grid(row=6, column=0, sticky="nsew", padx=PAD_X, pady=(PAD_Y, 20)) # 也放在第 6 行
+        self.log_text = ctk.CTkTextbox(log, font=("Consolas", 12), corner_radius=CORNER_RADIUS, fg_color=FG_COLOR, border_color=self.BORDER_COLOR, border_width=0)
+        self.log_text.pack(fill="both", expand=True, padx=1, pady=1)
         self.log_text.configure(state="disabled") # 設為唯讀
 
+        dl_frame.tkraise() # 確保下載進度列在日誌區域之上
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def _toggle_download_ui(self, show: bool):
@@ -339,12 +373,10 @@ class LocalTTSPlayer:
             try:
                 if show:
                     self.download_bar.grid()
-                    self.download_label.grid()
                     self.download_label.configure(text="[----------] 0.0% | 下載準備中…")
+                    self.download_bar.master.tkraise() # 顯示時，將其置於頂層
                 else:
-                    self.download_bar.grid_remove()
-                    self.download_label.grid_remove()
-                    self.download_label.configure(text="")
+                    self.download_bar.master.grid_remove() # 隱藏整個 dl_frame
             except Exception:
                 pass
         self.root.after(0, upd)
@@ -377,6 +409,20 @@ class LocalTTSPlayer:
             self.log_text.insert(tk.END, formatted_msg)
             self.log_text.see(tk.END)
             self.log_text.configure(state="disabled") # 恢復唯讀
+        self.root.after(0, upd)
+
+    def _log_playback_status(self, status_icon, message):
+        """專門用來更新播放狀態的日誌函式，會覆寫最後一行。"""
+        def upd():
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            # 組合最終的文字
+            formatted_msg = f"[{timestamp}] [PLAY ] {status_icon} {message}\n"
+            
+            self.log_text.configure(state="normal")
+            self.log_text.delete("end-2c linestart", "end-1c") # 刪除上一行
+            self.log_text.insert(tk.END, formatted_msg)
+            self.log_text.see(tk.END)
+            self.log_text.configure(state="disabled")
         self.root.after(0, upd)
 
     # ================ 設定與保存 =================
@@ -479,15 +525,21 @@ class LocalTTSPlayer:
                         raise last_err
                     raise RuntimeError("無法從預設來源下載/解壓 ffmpeg。")
             _prepend_env_path(FFMPEG_BIN_DIR)
-            self.root.after(0, lambda: messagebox.showinfo("完成", "ffmpeg/ffprobe 已安裝到本地 ffmpeg/bin。"))
-            self._post_dependency_ok()
+            self.log_message("ffmpeg 已成功安裝。")
+            self.root.after(0, self._post_dependency_ok_ui)
         except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror("錯誤", f"安裝 ffmpeg 失敗：{e}")) and self.log_message(f"安裝 ffmpeg 失敗：{e}", "ERROR")
+            self.log_message(f"安裝 ffmpeg 失敗：{e}", "ERROR")
+            self.root.after(0, lambda: messagebox.showerror("錯誤", f"安裝 ffmpeg 失敗：{e}"))
         finally:
             self._toggle_download_ui(False)
 
     def _post_dependency_ok(self):
         threading.Thread(target=self._load_voices_and_devices_background, daemon=True).start()
+
+    def _post_dependency_ok_ui(self):
+        """在主執行緒中處理 ffmpeg 安裝完成後的 UI 互動和後續步驟"""
+        messagebox.showinfo("完成", "ffmpeg/ffprobe 已安裝到本地 ffmpeg/bin。")
+        self._post_dependency_ok()
 
     # ================ VB-CABLE 與裝置載入 =================
     def _check_and_install_cable(self) -> bool:
@@ -500,38 +552,97 @@ class LocalTTSPlayer:
         if cable_installed:
             self.log_message("VB-CABLE 驅動已存在，繼續載入。")
             self.cable_is_present = True
+            
+            # 清理邏輯：如果驅動已安裝，且安裝資料夾存在，則刪除它
+            vbcable_install_dir = os.path.join(SCRIPT_DIR, "vbcable")
+            if os.path.isdir(vbcable_install_dir):
+                try:
+                    shutil.rmtree(vbcable_install_dir)
+                    self.log_message("偵測到 VB-CABLE 已安裝，自動清理安裝檔案。")
+                except Exception as e:
+                    self.log_message(f"清理 VB-CABLE 安裝檔案失敗: {e}", "WARN")
             return True
-
+        
         self.log_message("未偵測到 VB-CABLE 驅動。準備啟動安裝程序引導...", "WARN")
-        setup_path = os.path.join(SCRIPT_DIR, VB_CABLE_SETUP_EXE)
-        if not os.path.exists(setup_path):
-            self.log_message(f"錯誤: 找不到安裝檔 {VB_CABLE_SETUP_EXE}。請手動下載並安裝。", "ERROR")
-            return True
+        
+        # 將檢查、下載、安裝的邏輯都交給主執行緒處理
+        self.root.after(0, self._handle_vbcable_installation)
+        return False # 返回 False，因為安裝流程尚未完成
 
-        def run_setup():
-            try:
-                result = messagebox.askyesno(
-                    "VB-CABLE 安裝提示",
-                    "TTS 語音輸入 Discord 需要 VB-CABLE 驅動程式。\n\n"
-                    f"點擊 '是' 將啟動安裝程序 ({VB_CABLE_SETUP_EXE})，您可能需要授權管理員權限並點擊 Install Driver。\n"
-                    "安裝後，請重新啟動本應用程式。",
-                    icon='info'
+    def _handle_vbcable_installation(self):
+        """在主執行緒中處理 VB-CABLE 的檢查、下載和安裝引導"""
+        setup_path = os.path.join(SCRIPT_DIR, "vbcable", VB_CABLE_SETUP_EXE)
+
+        if os.path.exists(setup_path):
+            self._prompt_run_vbcable_setup(setup_path)
+        else:
+            should_download = messagebox.askyesno(
+                "VB-CABLE 安裝助手",
+                "未偵測到 VB-CABLE 驅動，且找不到安裝程式。\n\n"
+                "是否要從官方網站自動下載 VB-CABLE 安裝包？"
+            )
+            if should_download:
+                threading.Thread(target=self._download_and_extract_vbcable, daemon=True).start()
+            else:
+                self.log_message("使用者取消下載 VB-CABLE。", "WARN")
+                messagebox.showerror("錯誤", "缺少 VB-CABLE 驅動，部分功能將無法使用。")
+
+    def _download_and_extract_vbcable(self):
+        """在背景執行緒中下載並解壓縮 VB-CABLE"""
+        self._toggle_download_ui(True)
+        try:
+            target_dir = os.path.join(SCRIPT_DIR, "vbcable")
+            _ensure_dir(target_dir)
+            with tempfile.TemporaryDirectory(prefix="vbcable_") as td:
+                tmp_zip = os.path.join(td, "VBCABLE_Driver_Pack.zip")
+                self.log_message("正在下載 VB-CABLE 安裝包...")
+                _download_with_progress(
+                    VB_CABLE_DOWNLOAD_URL, tmp_zip,
+                    progress_cb=lambda p, t: self._update_download_ui(p, t)
                 )
-                if result:
-                    subprocess.Popen(setup_path, shell=True)
-                    messagebox.showinfo(
-                        "請注意",
-                        "請在彈出的 VB-CABLE 視窗中點擊 'Install Driver' 完成安裝。\n"
-                        "安裝完成後，請手動關閉本應用程式並重新啟動。"
-                    )
-                    self.root.after(0, self.on_closing)
-                else:
-                    self.log_message("使用者取消了 VB-CABLE 安裝。", "WARN")
+                self.log_message("下載完成，正在解壓縮...")
+                _extract_zip(tmp_zip, target_dir, progress_cb=lambda p, t: self._update_download_ui(p, t))
+            
+            setup_path = os.path.join(target_dir, VB_CABLE_SETUP_EXE)
+            if os.path.exists(setup_path):
+                self.log_message("VB-CABLE 安裝包已準備就緒。")
+                self.root.after(0, lambda: self._prompt_run_vbcable_setup(setup_path))
+            else:
+                raise RuntimeError(f"解壓縮後未找到 {VB_CABLE_SETUP_EXE}")
+        except Exception as e:
+            self.log_message(f"下載或解壓縮 VB-CABLE 失敗: {e}", "ERROR")
+            self.root.after(0, lambda: messagebox.showerror("錯誤", f"下載 VB-CABLE 失敗: {e}"))
+        finally:
+            self._toggle_download_ui(False)
+
+    def _prompt_run_vbcable_setup(self, setup_path: str):
+        """在主執行緒中提示使用者執行安裝程式"""
+        result = messagebox.askyesno(
+            "VB-CABLE 安裝提示",
+            "TTS 語音輸入 Discord 需要 VB-CABLE 驅動程式。\n\n"
+            f"點擊 '是' 將啟動安裝程序，您可能需要授權管理員權限並點擊 'Install Driver'。\n\n"
+            "安裝後，請重新啟動本應用程式。",
+            icon='info'
+        )
+        if result:
+            try:
+                # 使用 ctypes.windll.shell32.ShellExecuteW 請求管理員權限 (runas)
+                # 這是觸發 UAC 彈窗的標準方法
+                ret = ctypes.windll.shell32.ShellExecuteW(
+                    None,  # hwnd
+                    "runas",  # lpOperation
+                    setup_path,  # lpFile
+                    None,  # lpParameters
+                    os.path.dirname(setup_path),  # lpDirectory
+                    1  # nShowCmd
+                )
+                if ret <= 32: # 如果返回值小於等於32，表示發生錯誤
+                    raise OSError(f"ShellExecuteW 啟動安裝程式失敗，錯誤碼: {ret}")
+                self.root.after(1000, self.on_closing) # 延遲一秒後自動關閉，給使用者時間反應
             except Exception as e:
                 self.log_message(f"VB-CABLE 安裝執行錯誤: {e}", "ERROR")
-
-        self.root.after(0, run_setup)
-        return False
+        else:
+            self.log_message("使用者取消了 VB-CABLE 安裝。", "WARN")
 
     def _load_voices_and_devices_background(self):
         try:
@@ -551,10 +662,6 @@ class LocalTTSPlayer:
         self.volume_slider.set(self.tts_volume)
         self._update_voice_combobox_items()
         self._update_local_device_combobox_items()
-        self.hotkey_entry.delete(0, tk.END)
-        self.hotkey_entry.insert(0, self.current_hotkey)
-        if not self.cable_is_present:
-            self.start_button.configure(text="啟動 (無 VB-CABLE)", fg_color="gray", hover_color="darkgray")
 
     async def _load_edge_voices(self):
         try:
@@ -610,7 +717,7 @@ class LocalTTSPlayer:
             self.hotkey_listener.stop()
         self.start_button.configure(state="normal")
         self.stop_button.configure(state="disabled")
-        self.status_label.configure(text="狀態: 已停止", text_color="red")
+        self.status_label.configure(text="● 已停止", text_color=["#D32F2F", "#FF5252"])
         self.log_message("服務已停止。")
 
     def _start_hotkey_listener(self):
@@ -636,27 +743,48 @@ class LocalTTSPlayer:
         await comm.save(path)
 
     def _synth_pyttsx3_to_file(self, text, path):
-        eng = self._pyttsx3_engine or pyttsx3.init()
-        eng.setProperty("rate", self.tts_rate)
-        eng.setProperty("volume", self.tts_volume)
+        if not self._pyttsx3_engine:
+            self.log_message("pyttsx3 引擎未初始化。", "ERROR")
+            raise RuntimeError("pyttsx3 engine not initialized.")
+        self._pyttsx3_engine.setProperty("rate", self.tts_rate)
+        self._pyttsx3_engine.setProperty("volume", self.tts_volume)
         if self.pyttsx3_voice_id:
-            eng.setProperty("voice", self.pyttsx3_voice_id)
-        eng.save_to_file(text, path)
-        eng.runAndWait()
-        eng.stop()
+            self._pyttsx3_engine.setProperty("voice", self.pyttsx3_voice_id)
+        self._pyttsx3_engine.save_to_file(text, path)
+        self._pyttsx3_engine.runAndWait()
+
+    def _animate_playback(self, text, stop_event):
+        """在背景執行緒中顯示播放動畫"""
+        animation_chars = ['|', '/', '-', '\\']
+        i = 0
+        while not stop_event.is_set():
+            char = animation_chars[i % len(animation_chars)]
+            self._log_playback_status(f"[{char}]", f"正在處理: {text[:20]}...")
+            i += 1
+            time.sleep(0.1)
 
     def _play_local(self, text):
+        # 為每個播放任務創建獨立的事件循環和動畫控制器
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        
+        animation_stop_event = threading.Event()
+        animation_thread = threading.Thread(
+            target=self._animate_playback, 
+            args=(text, animation_stop_event), 
+            daemon=True
+        )
+
         synth_suffix = ".mp3" if self.current_engine == ENGINE_EDGE else ".wav"
         fd, synth_path = tempfile.mkstemp(suffix=synth_suffix)
         os.close(fd)
+
+        animation_thread.start()
+
         try:
             if self.current_engine == ENGINE_EDGE:
-                self.log_message(f"生成 Edge TTS 音訊: {text[:20]}...")
                 loop.run_until_complete(self._synth_edge_to_file(text, synth_path))
             else:
-                self.log_message(f"生成 Pyttsx3 音訊: {text[:20]}...")
                 self._synth_pyttsx3_to_file(text, synth_path)
 
             audio = AudioSegment.from_file(synth_path)
@@ -664,16 +792,23 @@ class LocalTTSPlayer:
 
             device_id = self._local_output_devices.get(self.local_output_device_name)
             if device_id is None:
-                self.log_message("找不到 VB-CABLE Input，改用預設裝置。", "WARN")
                 device_id = sd.default.device[1]
 
-            self.log_message(f"播放到設備 [{device_id}] {self.local_output_device_name}")
+            # 停止動畫並更新狀態為播放中 (如果動畫還在運行)
+            if animation_thread.is_alive():
+                animation_stop_event.set()
+                animation_thread.join()
+
             sd.play(samples, samplerate=audio.frame_rate, device=device_id, blocking=True)
             sd.stop()
-            self.log_message("播放完成。")
+
+            # 更新狀態為完成
+            self._log_playback_status("[✔]", f"播放完畢: {text[:20]}...")
         except Exception as e:
             self.log_message(f"播放錯誤: {e}", "ERROR")
         finally:
+            # 確保動畫執行緒已停止
+            animation_stop_event.set()
             loop.close()
             if os.path.exists(synth_path):
                 os.remove(synth_path)
@@ -684,23 +819,21 @@ class LocalTTSPlayer:
         if not keys:
             return ""
         
-        # pynput.keyboard.Key or pynput.keyboard.KeyCode
-        key_strings = []
-        for key in sorted(keys, key=lambda k: str(k)):
-            # 對於特殊鍵，例如 Key.shift, Key.ctrl
-            if isinstance(key, keyboard.Key):
-                key_name = key.name
-                # 移除 _l 或 _r 後綴，並標準化
-                if key_name.endswith(('_l', '_r')):
-                    key_name = key_name[:-2]
-                key_strings.append(f"<{key_name}>")
-            # 對於普通按鍵，例如 'a', 'z'
-            elif isinstance(key, keyboard.KeyCode):
-                # 確保 key.char 不是 None
-                if key.char:
-                    key_strings.append(key.char)
+        # 使用 pynput 內建的解析功能來標準化按鍵名稱
+        # 這比手動處理更可靠
+        modifiers = set()
+        vk = None
 
-        return "+".join(key_strings)
+        for key in keys:
+            if isinstance(key, keyboard.Key):
+                # 移除 _l, _r, _gr 後綴
+                name = key.name.split('_')[0]
+                modifiers.add(f"<{name}>")
+            elif isinstance(key, keyboard.KeyCode):
+                vk = key.char
+
+        sorted_modifiers = sorted(list(modifiers))
+        return "+".join(sorted_modifiers + ([vk] if vk else []))
 
     def _on_key_press(self, key):
         """錄製模式下的按鍵按下事件"""
@@ -735,7 +868,7 @@ class LocalTTSPlayer:
             return
 
         self.log_message("開始錄製熱鍵... 請按下新的組合鍵 (按 Esc 取消)")
-        self.hotkey_edit_button.configure(text="錄製中... (Esc取消)", fg_color="orange")
+        self.hotkey_edit_button.configure(text="錄製中...", fg_color="#FFA726", hover_color="#FB8C00")
         self.hotkey_entry.delete(0, tk.END)
         self.hotkey_entry.configure(state="normal")
         self.hotkey_entry.focus_set()
@@ -775,7 +908,7 @@ class LocalTTSPlayer:
         self.hotkey_entry.delete(0, tk.END)
         self.hotkey_entry.insert(0, self.current_hotkey)
         self.hotkey_entry.configure(state="disabled")
-        self.hotkey_edit_button.configure(text="編輯", fg_color="#3B8ED4", hover_color="#36719F")
+        self.hotkey_edit_button.configure(text="✏️ 編輯", fg_color=self.BTN_COLOR, hover_color=self.BTN_HOVER_COLOR)
         if save:
             if self.is_running:
                 self._start_hotkey_listener()
@@ -971,8 +1104,23 @@ class LocalTTSPlayer:
 # =================================================================
 if __name__ == "__main__":
     if not sys.platform.startswith("win"):
-        messagebox.showerror("錯誤", "僅支援 Windows 並需安裝 VB-CABLE。")
-        sys.exit()
+        # 為了在非 Windows 平台上也能看到 UI，暫時不直接退出
+        # messagebox.showerror("錯誤", "僅支援 Windows 並需安裝 VB-CABLE。")
+        print("警告：此應用程式主要為 Windows 設計，部分功能（如 VB-CABLE 安裝）將無法使用。")
+    else:
+        # 解決 Windows 上因 DPI 縮放導致的 UI 模糊問題
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
 
-    app = LocalTTSPlayer()
-    app.run()
+    if IS_WINDOWS and not comtypes_installed:
+        messagebox.showwarning("警告", "缺少 'comtypes' 模組，語音引擎 'pyttsx3' 可能無法正常運作。")
+
+    if IS_WINDOWS and not pywin32_installed:
+        messagebox.showwarning("警告", "缺少 'pywin32' 模組，快捷鍵輸入框的焦點控制可能不穩定。")
+
+    try:
+        app = LocalTTSPlayer()
+        app.run()
+    except Exception as e:
+        # 捕獲頂層錯誤並顯示
+        messagebox.showerror("嚴重錯誤", f"應用程式遇到無法處理的錯誤並即將關閉。\n\n錯誤訊息：\n{e}")
+        sys.exit()
