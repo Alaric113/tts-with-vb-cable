@@ -1,0 +1,11 @@
+{
+    "hotkey": "<shift>+a",
+    "engine": "edge-tts",
+    "edge_voice": "zh-CN-XiaoxiaoNeural",
+    "pyttsx3_voice_id": null,
+    "rate": 178,
+    "volume": 0.76,
+    "output_device_name": "CABLE Input (VB-Audio Virtual C (id:11)",
+    "auto_start": true,
+    "voice": "zh-CN-YunxiNeural"
+}
