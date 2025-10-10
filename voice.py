@@ -239,6 +239,8 @@ class LocalTTSPlayer:
         
         self._hotkey_recording_listener = None
         self._pressed_keys = set()
+        self._is_hotkey_edit_mode = False
+        self._recording_key_index = None # 記錄當前正在錄製哪個按鈕 (0, 1, 2)
         
         # 先顯示主視窗
         ctk.set_appearance_mode("System") # System, Dark, Light
@@ -253,11 +255,7 @@ class LocalTTSPlayer:
         
         # 先從設定檔更新變數
         self.current_hotkey = self._normalize_hotkey(self._config.get("hotkey", "<shift>+z"))
-        # 立即更新 UI 上的快捷鍵顯示
-        self.hotkey_entry.delete(0, tk.END)
-        self.hotkey_entry.insert(0, self.current_hotkey)
-        # 在填入值之後才禁用輸入框
-        self.hotkey_entry.configure(state="disabled")
+        self._update_hotkey_display(self.current_hotkey)
 
         # 背景執行檢查流程（先 Log 檢查，再需要時才詢問）
         threading.Thread(target=self._dependency_flow_thread, daemon=True).start()
@@ -265,7 +263,7 @@ class LocalTTSPlayer:
     # ================ UI 建構與進度列 =================
     def _build_ui(self):
         self.root = ctk.CTk()
-        self.root.title("TTS 虛擬麥克風控制器")
+        self.root.title("橘Mouth")
         self.root.geometry("620x720")
         self.root.resizable(False, False)
         
@@ -345,17 +343,32 @@ class LocalTTSPlayer:
         hotkey_frame.grid(row=4, column=0, sticky="ew", padx=PAD_X, pady=PAD_Y)
 
         ctk.CTkLabel(hotkey_frame, text="快捷鍵:").grid(row=0, column=0, padx=15, pady=15, sticky="w")
-        self.hotkey_entry = ctk.CTkEntry(hotkey_frame, corner_radius=CORNER_RADIUS, border_color=self.BORDER_COLOR)
-        self.hotkey_entry.grid(row=0, column=1, sticky="ew", padx=10, pady=15)
-        self.hotkey_entry.bind("<Return>", self._on_hotkey_change_entry)
-
-        self.hotkey_edit_button = ctk.CTkButton(hotkey_frame, text="✏️ 編輯", width=120, command=self._toggle_hotkey_edit, corner_radius=CORNER_RADIUS, fg_color=self.BTN_COLOR, hover_color=self.BTN_HOVER_COLOR)
-        self.hotkey_edit_button.grid(row=0, column=2, sticky="e", padx=15, pady=15)
+        
+        # --- 新的快捷鍵顯示區塊 ---
+        keys_display_frame = ctk.CTkFrame(hotkey_frame, fg_color="transparent")
+        keys_display_frame.grid(row=0, column=1, sticky="ew", padx=10, pady=15)
+        self.hotkey_key_buttons = []
+        for i in range(3):
+            # 使用 lambda 捕獲當前的 i 值
+            btn = ctk.CTkButton(keys_display_frame, text="", width=80, state="disabled", corner_radius=8,
+                                fg_color=("#EAEAEA", "#4A4A4A"),
+                                text_color=("#101010", "#E0E0E0"),
+                                border_color=("#C0C0C0", "#5A5A5A"), # 增加邊框以區分
+                                border_width=1, # 增加邊框以區分
+                                command=lambda idx=i: self._prepare_single_key_recording(idx))
+            btn.grid(row=0, column=i, padx=5)
+            self.hotkey_key_buttons.append(btn)
+        
+        # 讓按鍵區塊和編輯按鈕之間有彈性空間
         hotkey_frame.grid_columnconfigure(1, weight=1)
 
+        self.hotkey_edit_button = ctk.CTkButton(hotkey_frame, text="✏️ 編輯", width=100, command=self._toggle_hotkey_edit, corner_radius=CORNER_RADIUS, fg_color=self.BTN_COLOR, hover_color=self.BTN_HOVER_COLOR)
+        self.hotkey_edit_button.grid(row=0, column=2, sticky="e", padx=15, pady=15)
+
         info = ctk.CTkFrame(self.root, fg_color="transparent")
-        info.grid(row=5, column=0, sticky="ew", padx=PAD_X, pady=(0, PAD_Y))
-        ctk.CTkLabel(info, text="點擊 '編輯' 後，按下想設定的組合鍵 (按 Esc 可取消)。", font=ctk.CTkFont(size=11), text_color="gray").pack(pady=0, fill="x")
+        info.grid(row=5, column=0, sticky="ew", padx=PAD_X, pady=(0, 0))
+        self.hotkey_info_label = ctk.CTkLabel(info, text="點擊 '編輯' 開始設定快捷鍵。", font=ctk.CTkFont(size=11), text_color="gray")
+        self.hotkey_info_label.pack(pady=0, fill="x")
 
         # 下載進度列
         dl_frame = ctk.CTkFrame(self.root, fg_color="transparent")
@@ -745,20 +758,45 @@ class LocalTTSPlayer:
         self.log_message("服務已停止。")
 
     def _start_hotkey_listener(self):
-        def on_hotkey():
-            if self.is_running:
-                try:
-                    self.root.after(0, self._show_quick_input)
-                except Exception as e:
-                    self.log_message(f"hotkey callback error: {e}", "ERROR")
         try:
             if self.hotkey_listener:
                 self.hotkey_listener.stop()
-            self.hotkey_listener = keyboard.GlobalHotKeys({self.current_hotkey: on_hotkey})
+
+            # --- 改用手動監聽，解決 GlobalHotKeys 的誤觸問題 ---
+            currently_pressed = set()
+            target_keys = set(self._normalize_hotkey(self.current_hotkey).split('+'))
+
+            def on_press(key):
+                if not self.is_running:
+                    return
+                
+                key_str = self._key_to_str(key)
+                if key_str:
+                    currently_pressed.add(key_str)
+
+                # 檢查當前按下的鍵是否與目標完全匹配
+                if currently_pressed == target_keys:
+                    self.root.after(0, self._show_quick_input)
+
+            def on_release(key):
+                key_str = self._key_to_str(key)
+                if key_str in currently_pressed:
+                    currently_pressed.remove(key_str)
+
+            self.hotkey_listener = keyboard.Listener(on_press=on_press, on_release=on_release)
             self.hotkey_listener.start()
             self.log_message(f"全域快捷鍵 '{self.current_hotkey}' 已啟用")
         except Exception as e:
             self.log_message(f"快捷鍵 '{self.current_hotkey}' 啟動失敗: {e}。請檢查格式是否符合 pynput 要求。", "ERROR")
+
+    def _key_to_str(self, key):
+        """將 pynput 的 key 物件轉換為標準化字串"""
+        if isinstance(key, keyboard.Key):
+            return f"<{key.name.split('_')[0]}>"
+        if isinstance(key, keyboard.KeyCode):
+            if key.char:
+                return key.char.lower()
+        return None
 
     async def _synth_edge_to_file(self, text, path):
         rate_param = f"{int(round((self.tts_rate - 175) * (40 / 75))):+d}%"
@@ -837,107 +875,117 @@ class LocalTTSPlayer:
             if os.path.exists(synth_path):
                 os.remove(synth_path)
 
-    # ================ Hotkey 與回呼（補齊） =================
+    # ================ Hotkey 與回呼（新版獨立錄製） =================
     def _format_keys(self, keys):
         """將 pynput 的按鍵物件集合格式化為字串"""
         if not keys:
             return ""
-        
-        # 使用 pynput 內建的解析功能來標準化按鍵名稱
-        # 這比手動處理更可靠
-        modifiers = set()
-        vk = None
-
-        for key in keys:
-            if isinstance(key, keyboard.Key):
-                # 移除 _l, _r, _gr 後綴
-                name = key.name.split('_')[0]
-                modifiers.add(f"<{name}>")
-            elif isinstance(key, keyboard.KeyCode):
-                vk = key.char
-
-        sorted_modifiers = sorted(list(modifiers))
-        return "+".join(sorted_modifiers + ([vk] if vk else []))
+        key_str = self._key_to_str(list(keys)[0])
+        return key_str.replace('<', '').replace('>', '').capitalize()
 
     def _on_key_press(self, key):
-        """錄製模式下的按鍵按下事件"""
+        """單鍵錄製模式下的按鍵按下事件"""
+        if self._recording_key_index is None:
+            return False
+
+        # 按下 Esc 或 Delete 清除該按鈕
         if key == keyboard.Key.esc:
-            self._stop_hotkey_recording(cancel=True)
-            return False # 停止監聽
-
-        # --- 去重邏輯 ---
-        # 檢查是否有等效的按鍵已經被按下（例如 'z' 和 'Z'）
-        key_char = getattr(key, 'char', None)
-        if key_char:
-            lower_char = key_char.lower()
-            for pressed_key in self._pressed_keys:
-                if getattr(pressed_key, 'char', None) and getattr(pressed_key, 'char').lower() == lower_char:
-                    return True # 如果等效按鍵已存在，則忽略此次事件
-
-        self._pressed_keys.add(key)
-        formatted_keys = self._format_keys(self._pressed_keys)
-        self.hotkey_entry.delete(0, tk.END)
-        self.hotkey_entry.insert(0, formatted_keys)
-        return True
-
-    def _on_key_release(self, key):
-        """錄製模式下的按鍵釋放事件"""
-        # 當有按鍵釋放時，就認為組合鍵已確定，結束錄製
-        self._stop_hotkey_recording()
+            key_text = ""
+        elif key == keyboard.Key.delete or key == keyboard.Key.backspace:
+            key_text = ""
+        else:
+            key_str = self._key_to_str(key)
+            key_text = key_str.replace('<', '').replace('>', '').capitalize() if key_str else ""
+        
+        btn = self.hotkey_key_buttons[self._recording_key_index]
+        btn.configure(text=key_text, fg_color=("#EAEAEA", "#4A4A4A"))
+        
+        self.log_message(f"第 {self._recording_key_index + 1} 個按鍵已設定為: {key_text or '無'}")
+        self._recording_key_index = None
         return False # 停止監聽
 
-    def _start_hotkey_recording(self):
-        """開始監聽鍵盤以錄製新熱鍵"""
-        if self._hotkey_recording_listener:
+    def _on_key_release(self, key):
+        # 在單鍵錄製模式下，我們只關心 on_press，所以 on_release 可以忽略
+        pass
+
+    def _prepare_single_key_recording(self, index):
+        """準備錄製單個按鍵，這是按鈕的 command"""
+        if not self._is_hotkey_edit_mode:
             return
+        
+        # 如果正在錄製其他按鈕，先取消
+        if self._recording_key_index is not None and self._recording_key_index != index:
+            old_btn = self.hotkey_key_buttons[self._recording_key_index]
+            old_btn.configure(fg_color=("#EAEAEA", "#4A4A4A")) # 恢復顏色
 
-        self.log_message("開始錄製熱鍵... 請按下新的組合鍵 (按 Esc 取消)")
-        self.hotkey_edit_button.configure(text="錄製中...", fg_color="#FFA726", hover_color="#FB8C00")
-        self.hotkey_entry.delete(0, tk.END)
-        self.hotkey_entry.configure(state="normal")
-        self.hotkey_entry.focus_set()
-        self._pressed_keys.clear()
+        self._recording_key_index = index
+        btn = self.hotkey_key_buttons[index]
+        btn.configure(text="...", fg_color="#FFA726") # 提示錄製中
 
-        # 創建並啟動一個新的監聽器
+        if self._hotkey_recording_listener:
+            self._hotkey_recording_listener.stop()
+
         self._hotkey_recording_listener = keyboard.Listener(on_press=self._on_key_press, on_release=self._on_key_release)
         self._hotkey_recording_listener.start()
-
-    def _stop_hotkey_recording(self, cancel=False):
-        """停止熱鍵錄製"""
-        if not self._hotkey_recording_listener:
-            return
-
-        self._hotkey_recording_listener.stop()
-        self._hotkey_recording_listener = None
-
-        if cancel:
-            self.log_message("熱鍵錄製已取消。", "WARN")
-            self._update_hotkey_ui_and_save(self.current_hotkey, save=False) # 恢復顯示舊的熱鍵
-        else:
-            new_hotkey = self.hotkey_entry.get().strip()
-            if new_hotkey:
-                self._update_hotkey_ui_and_save(new_hotkey)
-            else:
-                self.log_message("錄製到空的熱鍵，操作取消。", "WARN")
-                self._update_hotkey_ui_and_save(self.current_hotkey, save=False)
+        self.log_message(f"正在錄製第 {index+1} 個按鍵... (按 Esc 或 Delete 清除)")
 
     def _toggle_hotkey_edit(self):
-        # 如果正在錄製，則不做任何事
-        if self._hotkey_recording_listener:
-            return
-        self._start_hotkey_recording()
+        self._is_hotkey_edit_mode = not self._is_hotkey_edit_mode
 
-    def _update_hotkey_ui_and_save(self, hotkey_str, save=True):
-        self.current_hotkey = self._normalize_hotkey(hotkey_str)
-        self.hotkey_entry.delete(0, tk.END)
-        self.hotkey_entry.insert(0, self.current_hotkey)
-        self.hotkey_entry.configure(state="disabled")
-        self.hotkey_edit_button.configure(text="✏️ 編輯", fg_color=self.BTN_COLOR, hover_color=self.BTN_HOVER_COLOR)
-        if save:
+        if self._is_hotkey_edit_mode:
+            # 進入編輯模式
+            self.hotkey_edit_button.configure(text="✅ 完成", fg_color="#FFA726", hover_color="#FB8C00")
+            for btn in self.hotkey_key_buttons:
+                btn.configure(state="normal")
+            self.log_message("進入快捷鍵編輯模式。請點擊下方按鈕進行錄製。")
+            self.hotkey_info_label.configure(text="點擊按鍵區塊錄製單鍵，按 Esc 或 Delete 可清除。")
+        else:
+            # 退出編輯模式，儲存結果
+            if self._hotkey_recording_listener:
+                self._hotkey_recording_listener.stop()
+                self._hotkey_recording_listener = None
+            if self._recording_key_index is not None:
+                # 如果退出時還有按鈕在錄製中，恢復其外觀
+                btn = self.hotkey_key_buttons[self._recording_key_index]
+                btn.configure(fg_color=("#EAEAEA", "#4A4A4A"))
+                self._recording_key_index = None
+
+            self.hotkey_edit_button.configure(text="✏️ 編輯", fg_color=self.BTN_COLOR, hover_color=self.BTN_HOVER_COLOR)
+            for btn in self.hotkey_key_buttons:
+                btn.configure(state="disabled")
+            self.hotkey_info_label.configure(text="點擊 '編輯' 開始設定快捷鍵。")
+
+            # 從按鈕文字構建新的快捷鍵字串
+            parts = []
+            for btn in self.hotkey_key_buttons:
+                text = btn.cget("text")
+                if text:
+                    # 將 'Ctrl' 這種易讀格式轉回 pynput 的 '<ctrl>' 格式
+                    lower_text = text.lower()
+                    if lower_text in ['ctrl', 'alt', 'shift', 'cmd', 'win']:
+                        parts.append(f"<{lower_text}>")
+                    else:
+                        parts.append(lower_text)
+            
+            new_hotkey = "+".join(parts)
+            self.current_hotkey = self._normalize_hotkey(new_hotkey)
+            self._update_hotkey_display(self.current_hotkey) # 再次更新以確保格式正確
+
             if self.is_running:
                 self._start_hotkey_listener()
-            self.log_message(f"快捷鍵已儲存並鎖定為: {self.current_hotkey}")
+            self.log_message(f"快捷鍵已儲存並鎖定為: {self.current_hotkey or '無'}")
             self._save_config()
+
+    def _update_hotkey_display(self, hotkey_str):
+        """更新快捷鍵顯示區塊的 UI"""
+        parts = hotkey_str.split('+')
+        for i, btn in enumerate(self.hotkey_key_buttons):
+            if i < len(parts):
+                # 將 <ctrl> 這種格式轉為更易讀的 Ctrl
+                text = parts[i].replace('<', '').replace('>', '').capitalize()
+                btn.configure(text=text)
+            else:
+                btn.configure(text="")
     
     def _normalize_hotkey(self, hotkey_str):
         """將快捷鍵字串標準化為 pynput 接受的格式"""
@@ -952,19 +1000,6 @@ class LocalTTSPlayer:
         normal_keys = sorted([p for p in parts if not (p.startswith('<') and p.endswith('>'))])
         
         return "+".join(modifiers + normal_keys)
-
-    def _on_hotkey_change_entry(self, event=None):
-        # 這個函式在新的錄製模式下不再需要，但保留以防萬一
-        # 如果使用者在錄製時按下了 Enter，會觸發 on_release，自動結束錄製
-        pass
-
-    def update_tts_settings(self, _=None):
-        # UI 綁定回呼：同步滑桿到設定
-        self.tts_rate = int(self.speed_slider.get())
-        self.tts_volume = round(self.volume_slider.get(), 2)
-        self.speed_value_label.configure(text=f"{self.tts_rate}")
-        self.volume_value_label.configure(text=f"{self.tts_volume:.2f}")
-        self._save_config()
 
     def _on_engine_change(self, val):
         self.current_engine = val
@@ -983,6 +1018,14 @@ class LocalTTSPlayer:
                         self.pyttsx3_voice_id = v.id
                         break
         self.log_message(f"已選定語音: {val}")
+        self._save_config()
+
+    def update_tts_settings(self, _=None):
+        # UI 綁定回呼：同步滑桿到設定
+        self.tts_rate = int(self.speed_slider.get())
+        self.tts_volume = round(self.volume_slider.get(), 2)
+        self.speed_value_label.configure(text=f"{self.tts_rate}")
+        self.volume_value_label.configure(text=f"{self.tts_volume:.2f}")
         self._save_config()
 
     def _update_voice_combobox_items(self):
@@ -1102,12 +1145,13 @@ class LocalTTSPlayer:
                 win.focus_force()
                 entry.focus_set()
                 entry.select_range(0, tk.END)
-                win.bind("<FocusOut>", close_window_if_lost_focus)
-                entry.bind("<FocusOut>", close_window_if_lost_focus)
-                win.after(300, lambda: setattr(win, '_focus_established', True))
             except Exception as e:
                 self.log_message(f"Focus attempt failed: {e}", "ERROR")
             finally:
+                # 將焦點相關的綁定和狀態設定移到 finally 區塊
+                win.bind("<FocusOut>", close_window_if_lost_focus)
+                entry.bind("<FocusOut>", close_window_if_lost_focus)
+                win.after(50, lambda: setattr(win, '_focus_established', True)) # 縮短延遲
                 # 確保在所有操作後釋放鎖
                 if self._input_window_lock.locked():
                     self._input_window_lock.release()
