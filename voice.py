@@ -44,15 +44,21 @@ except ImportError:
 # 基本設定
 # =================================================================
 def get_base_path():
-    """ 取得資源檔的基準路徑，適用於開發環境和 PyInstaller 打包環境 """
+    """
+    取得應用程式資料的基準路徑。
+    打包後: C:\\Users\\<user>\\AppData\\Local\\橘Mouth
+    開發時: 腳本所在目錄
+    """
     if getattr(sys, 'frozen', False):
-        # 如果在 PyInstaller 包中執行
-        return os.path.dirname(sys.executable)
+        # 如果在 PyInstaller 包中執行，使用 AppData/Local
+        app_data_path = os.path.join(os.environ['LOCALAPPDATA'], '橘Mouth')
+        os.makedirs(app_data_path, exist_ok=True)
+        return app_data_path
     else:
         # 在正常的 Python 環境中執行
         return os.path.dirname(os.path.abspath(__file__))
 
-SCRIPT_DIR = get_base_path()
+SCRIPT_DIR = get_base_path() # 現在 SCRIPT_DIR 會指向 AppData 或開發目錄
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 CABLE_OUTPUT_HINT = "CABLE Input"
 CABLE_INPUT_HINT = "CABLE Output"
@@ -63,6 +69,7 @@ ENGINE_EDGE = "edge-tts"
 ENGINE_PYTTX3 = "pyttsx3"
 
 IS_WINDOWS = sys.platform.startswith("win")
+EXE_DIR = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
 FFMPEG_DIR = os.path.join(SCRIPT_DIR, "ffmpeg")
 FFMPEG_BIN_DIR = os.path.join(FFMPEG_DIR, "bin")
 FFMPEG_EXE = os.path.join(FFMPEG_BIN_DIR, "ffmpeg.exe" if IS_WINDOWS else "ffmpeg")
@@ -152,10 +159,10 @@ def _download_with_progress(url: str, dst: str, progress_cb=None):
                 mbps = inst_speed / (1024 * 1024)
                 elapsed = now - start
                 if (now - last_report) >= 0.2 or (total and downloaded == total):
-                    text = f"下載中… {pct*100:5.1f}%  |  {downloaded/1024/1024:,.2f} MB"
+                    text = f"下載中… {pct*100:5.1f}% | {downloaded/1024/1024:,.2f} MB"
                     if total:
                         text += f" / {total/1024/1024:,.2f} MB"
-                    text += f"  |  {mbps:,.2f} MB/s  |  {int(elapsed)}s"
+                    text += f" | {mbps:,.2f} MB/s | {int(elapsed)}s"
                     progress_cb(min(0.8, pct * 0.8), text)
                     last_report = now
                     last_bytes = downloaded
@@ -222,6 +229,7 @@ class LocalTTSPlayer:
         self.local_output_device_name = "Default"
         self._local_output_devices = {}
         self.cable_is_present = False
+        self._input_window_lock = threading.Lock() # 新增一個鎖來防止重複開啟輸入框
 
         self.hotkey_listener = None
         self.quick_input_window = None
@@ -509,24 +517,24 @@ class LocalTTSPlayer:
 
     def _download_and_install_ffmpeg(self):
         """實際執行下載和安裝的函式。"""
-        self._toggle_download_ui(True)
+        # self._toggle_download_ui(True) # 不再使用獨立的下載UI，進度直接顯示在主日誌區
         try:
             _ensure_dir(FFMPEG_BIN_DIR)
-            with tempfile.TemporaryDirectory(prefix="ffdl_") as td:
+            with tempfile.TemporaryDirectory(prefix="ffdl_") as temp_download_dir:
                 ok = False
                 last_err = None
                 for src in FFMPEG_DOWNLOAD_SOURCES:
                     try:
-                        tmp_zip = os.path.join(td, f"{src['name']}.zip")
-                        self.log_message(f"從 {src['name']} 下載 ffmpeg 套件…")
+                        tmp_zip = os.path.join(temp_download_dir, f"{src['name']}.zip")
+                        self._log_status_update("[↓]", f"準備從 {src['name']} 下載 ffmpeg…", "INFO")
                         _download_with_progress(
                             src["url"], tmp_zip,
-                            progress_cb=lambda p, t: self._update_download_ui(p, t)
+                            progress_cb=lambda p, t: self._log_status_update("[↓]", t, "INFO")
                         )
-                        self._update_download_ui(0.8, "下載完成，準備解壓…")
+                        self._log_status_update("[ unpacking ]", "下載完成，準備解壓…", "INFO")
                         _extract_ffmpeg_zip(
                             tmp_zip, FFMPEG_BIN_DIR,
-                            progress_cb=lambda p, t: self._update_download_ui(p, t),
+                            progress_cb=lambda p, t: self._log_status_update("[ unpacking ]", t, "INFO"),
                             status_cb=lambda t: self.log_message(t)
                         )
                         if has_bundled_ffmpeg() and _ffmpeg_version_ok(FFMPEG_EXE):
@@ -541,13 +549,13 @@ class LocalTTSPlayer:
                         raise last_err
                     raise RuntimeError("無法從預設來源下載/解壓 ffmpeg。")
             _prepend_env_path(FFMPEG_BIN_DIR)
-            self.log_message("ffmpeg 已成功安裝。")
+            self._log_status_update("[✔]", f"ffmpeg 已成功安裝至 {FFMPEG_BIN_DIR}", "INFO")
             self.root.after(0, self._post_dependency_ok_ui)
         except Exception as e:
             self.log_message(f"安裝 ffmpeg 失敗：{e}", "ERROR")
             self.root.after(0, lambda: messagebox.showerror("錯誤", f"安裝 ffmpeg 失敗：{e}"))
         finally:
-            self._toggle_download_ui(False)
+            pass # 下載進度現在顯示在主日誌區，不再需要獨立的UI
 
     def _post_dependency_ok(self):
         threading.Thread(target=self._load_voices_and_devices_background, daemon=True).start()
@@ -569,8 +577,8 @@ class LocalTTSPlayer:
             self.log_message("VB-CABLE 驅動已存在，繼續載入。")
             self.cable_is_present = True
             
-            # 清理邏輯：如果驅動已安裝，且安裝資料夾存在，則刪除它
-            vbcable_install_dir = os.path.join(SCRIPT_DIR, "vbcable")
+            # 清理邏輯：如果驅動已安裝，且安裝資料夾存在於 EXE 同目錄，則刪除它
+            vbcable_install_dir = os.path.join(EXE_DIR, "vbcable")
             if os.path.isdir(vbcable_install_dir):
                 try:
                     shutil.rmtree(vbcable_install_dir)
@@ -587,7 +595,7 @@ class LocalTTSPlayer:
 
     def _handle_vbcable_installation(self):
         """在主執行緒中處理 VB-CABLE 的檢查、下載和安裝引導"""
-        setup_path = os.path.join(SCRIPT_DIR, "vbcable", VB_CABLE_SETUP_EXE)
+        setup_path = os.path.join(EXE_DIR, "vbcable", VB_CABLE_SETUP_EXE)
 
         if os.path.exists(setup_path):
             self._prompt_run_vbcable_setup(setup_path)
@@ -607,7 +615,7 @@ class LocalTTSPlayer:
         """在背景執行緒中下載並解壓縮 VB-CABLE"""
         self._toggle_download_ui(True)
         try:
-            target_dir = os.path.join(SCRIPT_DIR, "vbcable")
+            target_dir = os.path.join(EXE_DIR, "vbcable") # 下載到 EXE 旁邊，方便使用者找到安裝程式
             _ensure_dir(target_dir)
             with tempfile.TemporaryDirectory(prefix="vbcable_") as td:
                 tmp_zip = os.path.join(td, "VBCABLE_Driver_Pack.zip")
@@ -1016,16 +1024,22 @@ class LocalTTSPlayer:
 
     # ================ 其他 UI =================
     def _show_quick_input(self):
+        # 嘗試獲取鎖，如果失敗（表示另一個執行緒正在創建視窗），則直接返回
+        if not self._input_window_lock.acquire(blocking=False):
+            return
+
         if self.quick_input_window and self.quick_input_window.winfo_exists():
             try:
                 self.quick_input_window.lift()
                 self.quick_input_window.focus_force()
             except:
                 pass
+            finally:
+                self._input_window_lock.release() # 無論如何都要釋放鎖
             return
 
         win = ctk.CTkToplevel(self.root)
-
+        
         # --- Windows 焦點強制取得 ---
         def force_foreground_and_focus(target_win):
             if not pywin32_installed or not target_win.winfo_exists():
@@ -1076,13 +1090,14 @@ class LocalTTSPlayer:
             win.after(150, check_and_close)
 
         def secure_focus():
-            if not win.winfo_exists():
-                return
-
-            # 先呼叫 Windows API 強制前景
-            force_foreground_and_focus(win)
-
+            # 確保在釋放鎖之前，視窗的焦點已經設定好
+            # 這樣可以防止在焦點設定完成前，使用者再次觸發快捷鍵
             try:
+                if not win.winfo_exists():
+                    return
+
+                # 先呼叫 Windows API 強制前景
+                force_foreground_and_focus(win)
                 win.lift()
                 win.focus_force()
                 entry.focus_set()
@@ -1091,13 +1106,20 @@ class LocalTTSPlayer:
                 entry.bind("<FocusOut>", close_window_if_lost_focus)
                 win.after(300, lambda: setattr(win, '_focus_established', True))
             except Exception as e:
-                self.log_message(f"focus 嘗試失敗: {e}", "ERROR")
+                self.log_message(f"Focus attempt failed: {e}", "ERROR")
+            finally:
+                # 確保在所有操作後釋放鎖
+                if self._input_window_lock.locked():
+                    self._input_window_lock.release()
+
         win.after(10, secure_focus) # 稍微延遲以確保視窗已建立
 
         def send(event=None):
             text = entry.get().strip()
             if text:
                 threading.Thread(target=self._play_local, args=(text,), daemon=True).start()
+            if self._input_window_lock.locked():
+                self._input_window_lock.release()
             win.destroy()
 
         entry.bind("<Return>", send)

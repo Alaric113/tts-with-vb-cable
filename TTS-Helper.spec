@@ -12,8 +12,6 @@ a = Analysis(
     datas=[
         # 包含 customtkinter 的必要資源檔
         (os.path.join(os.path.dirname(customtkinter.__file__), "assets"), "customtkinter/assets"),
-        # 捆綁 ffmpeg，讓使用者開箱即用
-        ('ffmpeg', 'ffmpeg')
     ],
     hiddenimports=[
         # 有時 PyInstaller 無法自動偵測到這些隱藏的依賴，手動加入更保險
