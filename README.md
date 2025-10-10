@@ -2,8 +2,6 @@
 
 一個簡單易用的桌面應用程式，讓您能透過快捷鍵，將文字轉換為語音，並透過虛擬麥克風（VB-CABLE）在任何語音軟體（如 Discord、LINE、遊戲內語音）中播放出來。
 
-![應用程式截圖](https://raw.githubusercontent.com/your-username/your-repo/main/screenshot.png) 
-*(請替換為您的應用程式截圖連結)*
 
 ---
 
