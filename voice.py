@@ -32,7 +32,6 @@ try:
     comtypes_installed = True
 except Exception:
     comtypes_installed = False
-    print("Warning: 'comtypes' not installed.")
 try:
     import win32gui
     import win32con
@@ -94,7 +93,9 @@ def _extract_zip(zip_path: str, target_dir: str, progress_cb=None):
 # 依賴助手工具函式
 # =================================================================
 def _console_info(msg: str):
-    print(f"[Dependency] {msg}")
+    # 在打包版本中，我們不希望有控制台輸出。
+    # 這些訊息已經透過 self.log_message() 顯示在 UI 上了。
+    pass
 
 def _ensure_dir(p: str):
     os.makedirs(p, exist_ok=True)
@@ -453,34 +454,49 @@ class LocalTTSPlayer:
         except Exception as e:
             self.log_message(f"儲存配置檔失敗: {e}", "ERROR")
 
+    def _log_status_update(self, status_icon, message, level="INFO"):
+        """專門用來更新狀態的日誌函式，會覆寫最後一行。"""
+        def upd():
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            formatted_msg = f"[{timestamp}] [{level.upper():<5}] {status_icon} {message}\n"
+            
+            self.log_text.configure(state="normal")
+            # 檢查文字框是否為空，如果不是，才刪除上一行
+            if self.log_text.get("1.0", "end-1c").strip():
+                self.log_text.delete("end-2c linestart", "end-1c")
+            self.log_text.insert(tk.END, formatted_msg)
+            self.log_text.see(tk.END)
+            self.log_text.configure(state="disabled")
+        self.root.after(0, upd)
+
     # ================ 依賴流程（先Log，後詢問） =================
     def _dependency_flow_thread(self):
-        self.log_message("檢查依賴：正在檢查系統 ffmpeg/ffprobe…")
+        self.log_message("開始檢查依賴...") # 插入一個初始行
+        self._log_status_update("[|]", "檢查系統 ffmpeg/ffprobe…")
         if has_system_ffmpeg():
-            self.log_message("已找到系統 ffmpeg/ffprobe，將直接使用。")
+            self._log_status_update("[✔]", "已找到系統 ffmpeg/ffprobe，將直接使用。")
             self._post_dependency_ok()
             return
 
-        self.log_message("未找到系統 ffmpeg/ffprobe。")
-        self.log_message("檢查依賴：正在檢查內嵌 ffmpeg/ffprobe…")
+        self._log_status_update("[-]", "未找到系統 ffmpeg/ffprobe，檢查內嵌版本…")
 
         if os.path.isdir(FFMPEG_BIN_DIR):
             _prepend_env_path(FFMPEG_BIN_DIR)
 
         if has_bundled_ffmpeg() and _ffmpeg_version_ok(FFMPEG_EXE):
-            self.log_message("已找到內嵌 ffmpeg/ffprobe，將直接使用。")
+            self._log_status_update("[✔]", "已找到內嵌 ffmpeg/ffprobe，將直接使用。")
             _prepend_env_path(FFMPEG_BIN_DIR)
             self._post_dependency_ok()
             return
 
-        self.log_message("未找到內嵌 ffmpeg/ffprobe。")
+        self._log_status_update("[!]", "未找到 ffmpeg/ffprobe，需要使用者操作。", "WARN")
 
         # 將決策權交回主執行緒
         self.root.after(0, self._prompt_ffmpeg_download)
 
     def _prompt_ffmpeg_download(self):
         """在主執行緒中詢問使用者是否下載，如果同意則啟動下載。"""
-        should_download = messagebox.askyesno(
+        should_download = messagebox.askyesno( # noqa: E127
             "依賴安裝助手",
             "未找到 ffmpeg/ffprobe。\n是否自動下載並安裝到本地 ffmpeg/bin？"
         )
@@ -1105,8 +1121,7 @@ class LocalTTSPlayer:
 if __name__ == "__main__":
     if not sys.platform.startswith("win"):
         # 為了在非 Windows 平台上也能看到 UI，暫時不直接退出
-        # messagebox.showerror("錯誤", "僅支援 Windows 並需安裝 VB-CABLE。")
-        print("警告：此應用程式主要為 Windows 設計，部分功能（如 VB-CABLE 安裝）將無法使用。")
+        messagebox.showwarning("警告", "此應用程式主要為 Windows 設計，在您目前的作業系統上，部分功能（如 VB-CABLE 安裝）將無法使用。")
     else:
         # 解決 Windows 上因 DPI 縮放導致的 UI 模糊問題
         ctypes.windll.shcore.SetProcessDpiAwareness(1)

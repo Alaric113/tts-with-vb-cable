@@ -12,8 +12,6 @@ a = Analysis(
     datas=[
         # 包含 customtkinter 的必要資源檔
         (os.path.join(os.path.dirname(customtkinter.__file__), "assets"), "customtkinter/assets"),
-        # 告訴 PyInstaller 將 vbcable 資料夾完整地複製到打包目錄中
-        ('vbcable', 'vbcable'),
         # 捆綁 ffmpeg，讓使用者開箱即用
         ('ffmpeg', 'ffmpeg')
     ],
@@ -41,7 +39,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='TTS-Helper',
+    name='橘Mouth',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
