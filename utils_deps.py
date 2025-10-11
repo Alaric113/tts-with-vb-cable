@@ -1,5 +1,13 @@
 # -*- coding: utf-8 -*-
-# utils_deps.py — 常數、工具方法、ffmpeg/VB-CABLE 依賴處理
+# 檔案: utils_deps.py
+# 功用: 提供整個應用程式所需的共用常數、工具函式以及核心依賴管理。
+#      - 常數定義: 如設定檔路徑、VB-CABLE 名稱提示、TTS 引擎名稱等。
+#      - 路徑管理: 提供一個可靠的方式來獲取應用程式的基礎路徑 (無論是開發模式還是打包後)。
+#      - 環境工具: 包含檢查系統 PATH、新增路徑到 PATH 等功能。
+#      - 依賴管理器 (DependencyManager): 一個核心類別，用於處理外部依賴：
+#        - FFmpeg: 檢查系統或內嵌版本，若缺少則引導使用者從網路下載並解壓縮。
+#        - VB-CABLE: 檢查驅動是否存在，若缺少則引導使用者下載並執行安裝程式。
+#      - 網路與檔案工具: 包含帶進度回報的下載功能、ZIP 解壓縮功能等。
 
 import os
 import sys
@@ -167,7 +175,7 @@ def extract_ffmpeg_zip(zip_path: str, target_bin_dir: str, progress_cb=None, sta
                 else:
                     shutil.copy2(src, dst)
                 if progress_cb:
-                    progress_cb(min(1.0, 0.8 + 0.2 * (i / total)), f"解壓中… {int(100 * (i/total))}%")
+                    progress_cb(min(1.0, 0.8 + 0.2 * (i / total)), f"解壓中… {int(100 * (i/total))}")
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -263,7 +271,7 @@ class DependencyManager:
                 if os.path.isdir(vbcable_install_dir):
                     try:
                         shutil.rmtree(vbcable_install_dir)
-                        self.log("偵測到 VB-CABLE 已安裝，自動清理安裝檔案。")
+                        self.log("偵測到 VB-CABLE 已安裝，自動清理安裝檔案。", "INFO")
                     except Exception as e:
                         self.log(f"清理 VB-CABLE 安裝檔案失敗: {e}", "WARN")
                 return False
@@ -304,7 +312,7 @@ class DependencyManager:
 
             setup_path = os.path.join(target_dir, VB_CABLE_SETUP_EXE)
             if os.path.exists(setup_path):
-                self.log("VB-CABLE 安裝包已準備就緒。")
+                self.log("VB-CABLE 安裝包已準備就緒。", "INFO")
                 on_need_run_setup(setup_path)
             else:
                 raise RuntimeError(f"解壓縮後未找到 {VB_CABLE_SETUP_EXE}")

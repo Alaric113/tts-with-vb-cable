@@ -1,5 +1,13 @@
 # -*- coding: utf-8 -*-
-# audio_engine.py — TTS 合成與播放（edge-tts / pyttsx3）
+# 檔案: audio_engine.py
+# 功用: 封裝所有與音訊處理相關的核心邏輯，將 TTS 合成與播放功能抽象化。
+#      - 定義 AudioEngine 類別，作為音訊處理的主要介面。
+#      - TTS 引擎管理: 支援並切換 edge-tts 和 pyttsx3 兩種引擎。
+#      - 語音資源載入: 非同步載入 Edge TTS 的可用語音列表，並初始化 pyttsx3 引擎。
+#      - 設備管理: 查詢、載入並管理系統中的音訊輸出設備，特別是偵測 VB-CABLE。
+#      - TTS 合成: 根據當前選擇的引擎，將文字非同步或同步地合成為音訊檔案 (MP3/WAV)。
+#      - 音訊播放: 使用 sounddevice 和 pydub 函式庫，將合成的音訊檔案解碼、重取樣，並播放到指定的一或多個輸出設備。
+#      - 多設備播放: 實現將音訊同時串流到主輸出 (如 VB-CABLE) 和一個額外的「聆聽」設備的功能。
 
 import os
 import asyncio
@@ -11,6 +19,7 @@ from pydub import AudioSegment
 import edge_tts
 import pyttsx3
 from datetime import datetime
+import queue
 
 from utils_deps import (
     DEFAULT_EDGE_VOICE, ENGINE_EDGE, ENGINE_PYTTX3
@@ -45,6 +54,40 @@ class AudioEngine:
 
         self.local_output_device_name = "Default"
         self.cable_is_present = False
+
+        # -- Refactor: Producer-Consumer Queue --
+        self.play_queue = queue.Queue()
+        self.worker_thread = None
+        # -----------------------------------------
+
+    def start(self):
+        self.worker_thread = threading.Thread(target=self._audio_worker, daemon=True)
+        self.worker_thread.start()
+
+    def stop(self):
+        """Signal the audio worker to stop and wait for it."""
+        self.log("正在停止音訊引擎...", "DEBUG")
+        self.play_queue.put(None)  # Sentinel value to stop the worker
+        if self.worker_thread.is_alive():
+            self.worker_thread.join(timeout=5)
+        self.log("音訊引擎已停止。" )
+
+    def _audio_worker(self):
+        """The consumer thread that processes text from the play_queue."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self.log("音訊工作執行緒已啟動。", "DEBUG")
+        while True:
+            try:
+                text = self.play_queue.get()
+                if text is None:  # Sentinel check
+                    self.log("音訊工作執行緒收到停止信號。", "DEBUG")
+                    break
+                # Pass the running loop to the processing function
+                self._process_and_play_text(text, loop)
+            except Exception as e:
+                self.log(f"音訊工作執行緒發生錯誤: {e}", "ERROR")
+        self.log("音訊工作執行緒已結束。", "DEBUG")
 
     # ---------- 初始化 & 資源 ----------
     def init_pyttsx3(self):
@@ -101,6 +144,11 @@ class AudioEngine:
     def set_rate_volume(self, rate: int, volume: float):
         self.tts_rate = int(rate)
         self.tts_volume = float(volume)
+
+    def apply_listen_config(self, config: dict):
+        self.enable_listen_to_self = config.get("enable_listen_to_self", False)
+        self.listen_device_name = config.get("listen_device_name", "Default")
+        self.listen_volume = config.get("listen_volume", 1.0)
 
     def set_listen_config(self, enable: bool, device_name: str, volume: float):
         self.enable_listen_to_self = bool(enable)
@@ -166,10 +214,31 @@ class AudioEngine:
         return samples
 
     def play_text(self, text: str):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        """Producer method: puts text into the queue to be played."""
+        if not isinstance(text, str) or not text.strip():
+            return
+        self.play_queue.put(text)
+
+    def preview_text(self, text: str):
+        """Producer method for previewing: puts text into the queue to be played on listen device only."""
+        if not isinstance(text, str) or not text.strip():
+            return
+        # 使用一個特殊元組來標記這是一個預覽請求
+        self.play_queue.put((text, "preview"))
+
+    def _process_and_play_text(self, text: str, loop: asyncio.AbstractEventLoop):
+        """
+        The actual implementation of text synthesis and playback.
+        This runs in the audio worker thread.
+        """
 
         animation_stop_event = threading.Event()
+        is_preview = False
+        if isinstance(text, tuple):
+            text, mode = text
+            if mode == "preview":
+                is_preview = True
+
         animation_thread = threading.Thread(
             target=self._animate_playback, args=(text, animation_stop_event), daemon=True
         )
@@ -187,15 +256,22 @@ class AudioEngine:
 
             audio = AudioSegment.from_file(synth_path)
 
-            main_device_id = self._local_output_devices.get(self.local_output_device_name)
-            if main_device_id is None:
-                main_device_id = sd.default.device[1]
+            main_device_id = None
+            if not is_preview:
+                main_device_id = self._local_output_devices.get(self.local_output_device_name)
+                if main_device_id is None:
+                    main_device_id = sd.default.device[1]
 
             listen_device_id = None
-            if self.enable_listen_to_self:
+            # 如果是預覽，或者啟用了「聆聽自己」，就需要設定聆聽設備
+            if is_preview or self.enable_listen_to_self:
                 listen_device_id = self._listen_devices.get(self.listen_device_name)
                 if listen_device_id is None:
                     listen_device_id = sd.default.device[1]
+            
+            # 如果是預覽，則主設備ID強制設為None
+            if is_preview:
+                main_device_id = None
 
             try:
                 main_info = sd.query_devices(main_device_id)
@@ -217,7 +293,7 @@ class AudioEngine:
                     listen_max_ch = 2
 
             # 單設備
-            if not self.enable_listen_to_self or listen_device_id is None or listen_device_id == main_device_id:
+            if (not self.enable_listen_to_self and not is_preview) or listen_device_id is None or listen_device_id == main_device_id:
                 target_sr = main_sr
                 audio_play = self._resample_audio_segment(audio, target_sr) if int(audio.frame_rate) != int(target_sr) else audio
                 samples = self._audiosegment_to_float32_numpy(audio_play)
@@ -229,10 +305,28 @@ class AudioEngine:
                     self.log_play_status("[✔]", f"播放完畢: {text[:20]}...")
                 except Exception as e:
                     self.log(f"播放到主設備失敗: {e}", "ERROR")
+                finally:
                     try: sd.stop()
                     except Exception: pass
-                finally:
                     return
+
+            # 僅預覽（只播放在 listen_device_id 上）
+            if is_preview:
+                target_sr = listen_sr
+                audio_play = self._resample_audio_segment(audio, target_sr) if int(audio.frame_rate) != int(target_sr) else audio
+                samples = self._audiosegment_to_float32_numpy(audio_play) * float(self.listen_volume)
+                if samples.ndim == 1 and listen_max_ch >= 2:
+                    samples = np.column_stack((samples, samples))
+                try:
+                    sd.play(samples, samplerate=target_sr, device=listen_device_id)
+                    sd.wait()
+                    self.log_play_status("[✔]", f"試聽完畢: {text[:20]}...")
+                except Exception as e:
+                    self.log(f"試聽失敗: {e}", "ERROR")
+                finally:
+                    try: sd.stop()
+                    except Exception: pass
+                return
 
             # 兩設備並行
             if int(audio.frame_rate) != int(main_sr):
@@ -280,10 +374,6 @@ class AudioEngine:
             try:
                 if animation_thread.is_alive():
                     animation_thread.join(timeout=0.2)
-            except Exception:
-                pass
-            try:
-                loop.close()
             except Exception:
                 pass
             if os.path.exists(synth_path):

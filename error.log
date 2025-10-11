@@ -1,0 +1,42 @@
+--- 2025-10-12 01:49:54.222927 ---
+Traceback (most recent call last):
+  File "c:\Users\User\Documents\GitHub\tts-with-vb-cable\main.py", line 40, in <module>
+    app = LocalTTSPlayer()
+          ^^^^^^^^^^^^^^^^
+  File "c:\Users\User\Documents\GitHub\tts-with-vb-cable\app.py", line 79, in __init__
+    self._build_ui()
+  File "c:\Users\User\Documents\GitHub\tts-with-vb-cable\app.py", line 106, in _build_ui
+    build_main_window_ui(self)
+  File "c:\Users\User\Documents\GitHub\tts-with-vb-cable\ui\main_window.py", line 88, in build_main_window_ui
+    tts.grid_column_configure(1, weight=1)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'CTkFrame' object has no attribute 'grid_column_configure'
+
+--- 2025-10-12 01:50:54.026963 ---
+Traceback (most recent call last):
+  File "c:\Users\User\Documents\GitHub\tts-with-vb-cable\main.py", line 40, in <module>
+    app = LocalTTSPlayer()
+          ^^^^^^^^^^^^^^^^
+  File "c:\Users\User\Documents\GitHub\tts-with-vb-cable\app.py", line 79, in __init__
+    self._build_ui()
+  File "c:\Users\User\Documents\GitHub\tts-with-vb-cable\app.py", line 106, in _build_ui
+    build_main_window_ui(self)
+  File "c:\Users\User\Documents\GitHub\tts-with-vb-cable\ui\main_window.py", line 88, in build_main_window_ui
+    tts.grid_column_configure(1, weight=1)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'CTkFrame' object has no attribute 'grid_column_configure'
+
+--- 2025-10-12 01:52:29.449048 ---
+Traceback (most recent call last):
+  File "c:\Users\User\Documents\GitHub\tts-with-vb-cable\main.py", line 40, in <module>
+    app = LocalTTSPlayer()
+          ^^^^^^^^^^^^^^^^
+  File "c:\Users\User\Documents\GitHub\tts-with-vb-cable\app.py", line 79, in __init__
+    self._build_ui()
+  File "c:\Users\User\Documents\GitHub\tts-with-vb-cable\app.py", line 106, in _build_ui
+    build_main_window_ui(self)
+  File "c:\Users\User\Documents\GitHub\tts-with-vb-cable\ui\main_window.py", line 88, in build_main_window_ui
+    tts.grid_column_configure(1, weight=1)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'CTkFrame' object has no attribute 'grid_column_configure'
+

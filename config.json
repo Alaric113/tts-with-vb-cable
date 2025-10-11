@@ -1,6 +1,6 @@
 {
     "engine": "edge-tts",
-    "voice": "zh-CN-XiaoxiaoNeural",
+    "voice": "zh-CN-YunzeNeural",
     "rate": 174,
     "volume": 0.74,
     "hotkey": "`",

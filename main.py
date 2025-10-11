@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-# main.py — 進入點
+# 檔案: main.py (修正後)
+# ... (註解不變) ...
 
 import sys
 from tkinter import messagebox
@@ -10,13 +11,13 @@ from utils_deps import IS_WINDOWS
 
 # Windows 可選依賴提示
 try:
-    import comtypes  # noqa: F401
+    import comtypes
     comtypes_installed = True
 except Exception:
     comtypes_installed = False
 
 try:
-    import win32gui  # noqa: F401
+    import win32gui
     pywin32_installed = True
 except Exception:
     pywin32_installed = False
@@ -39,5 +40,10 @@ if __name__ == "__main__":
         app = LocalTTSPlayer()
         app.run()
     except Exception as e:
-        messagebox.showerror("嚴重錯誤", f"應用程式遇到無法處理的錯誤並即將關閉。\n\n錯誤訊息：\n{e}")
+        import traceback
+        error_details = traceback.format_exc()
+        messagebox.showerror("嚴重錯誤", f"應用程式遇到無法處理的錯誤並即將關閉。\n\n錯誤詳情：\n{error_details}")
+        # 將詳細錯誤寫入日誌檔，方便偵錯
+        with open("error.log", "a", encoding="utf-8") as f:
+            f.write(f"--- {__import__('datetime').datetime.now()} ---\n{error_details}\n")
         sys.exit(1)
