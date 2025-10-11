@@ -68,8 +68,6 @@ class AudioEngine:
         """Signal the audio worker to stop and wait for it."""
         self.log("正在停止音訊引擎...", "DEBUG")
         self.play_queue.put(None)  # Sentinel value to stop the worker
-        if self.worker_thread.is_alive():
-            self.worker_thread.join(timeout=5)
         self.log("音訊引擎已停止。" )
 
     def _audio_worker(self):

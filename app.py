@@ -704,6 +704,7 @@ class LocalTTSPlayer:
 
         try:
             import requests
+            import subprocess
             
             # SCRIPT_DIR 在打包後指向 %LOCALAPPDATA%\橘Mouth
             # sys.executable 指向當前運行的 .exe 檔案
@@ -732,20 +733,38 @@ class LocalTTSPlayer:
             # 建立 updater.bat
             updater_script = f"""
 @echo off
-echo Waiting for application to close...
-timeout /t 3 /nobreak > NUL
-echo Replacing executable...
-del "{exe_path}"
-move "{new_exe_path}" "{exe_path}"
-echo Relaunching application...
-start "" "{exe_path}"
-del "{updater_bat_path}"
+chcp 65001 > NUL
+
+:: 清除 PyInstaller 的暫存路徑環境變數，這是解決 "Failed to load Python DLL" 的關鍵
+set _MEIPASS2=
+
+set EXE_NAME={os.path.basename(exe_path)}
+echo.
+echo [橘Mouth 更新程式] 正在等待主程式關閉...
+
+:wait_loop
+tasklist /FI "IMAGENAME eq %EXE_NAME%" | find /I "%EXE_NAME%" > NUL
+if not errorlevel 1 (
+    timeout /t 1 /nobreak > NUL
+    goto wait_loop
+)
+
+echo [橘Mouth 更新程式] 正在替換檔案...
+del /F /Q "{exe_path}"
+move /Y "{new_exe_path}" "{exe_path}"
+echo [橘Mouth 更新程式] 正在重新啟動...
+
+:: 使用 cmd /c start 在一個全新的、乾淨的環境中啟動程式，避免繼承舊的 _MEIPASS2 環境變數
+cmd /c start "" "{exe_path}"
+(goto) 2>NUL & del "%~f0"
 """
             with open(updater_bat_path, "w", encoding="utf-8") as f:
                 f.write(updater_script)
 
-            # 使用 Popen 啟動 updater.bat 並與主程式脫鉤
-            subprocess.Popen([updater_bat_path], creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP, close_fds=True)
+            # 直接呼叫 cmd.exe 並使用 start 命令來啟動一個完全獨立的 bat 腳本，確保主程式退出後它仍能運行
+            # CREATE_NEW_CONSOLE 旗標會彈出一個短暫的黑窗，這是可靠性的必要代價
+            command = f'cmd.exe /c start "JuMouth Updater" "{updater_bat_path}"'
+            subprocess.Popen(command, creationflags=subprocess.CREATE_NEW_CONSOLE, close_fds=True)
 
             # 關閉主程式
             self.root.after(1000, self.on_closing)
