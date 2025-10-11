@@ -330,7 +330,6 @@ class AudioEngine:
 
             # 兩設備並行
             if int(audio.frame_rate) != int(main_sr):
-                self.log(f"重取樣給 main: {audio.frame_rate}Hz -> {main_sr}Hz", "DEBUG")
                 audio_main = self._resample_audio_segment(audio, main_sr)
             else:
                 audio_main = audio
@@ -339,7 +338,6 @@ class AudioEngine:
                 samples_main = np.column_stack((samples_main, samples_main))
 
             if int(audio.frame_rate) != int(listen_sr):
-                self.log(f"重取樣給 listen: {audio.frame_rate}Hz -> {listen_sr}Hz", "DEBUG")
                 audio_listen = self._resample_audio_segment(audio, listen_sr)
             else:
                 audio_listen = audio
