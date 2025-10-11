@@ -1,6 +1,6 @@
 {
     "engine": "edge-tts",
-    "voice": "zh-CN-YunhaoNeural",
+    "voice": "zh-CN-YunyeNeural",
     "rate": 174,
     "volume": 0.74,
     "hotkey": "`",
@@ -53,6 +53,11 @@
     "listen_volume": 0.06,
     "auto_start_service": true,
     "text_history": [
+        "愛上了嗎",
+        "在幫我下再一下",
+        "就不用到網頁自己下載了",
+        "我新增了以後可以自動更新",
+        "有一個新版的app我剛剛放在那個網頁上了",
         "我Push完要休息了",
         "這個問題留給你處理",
         "還是會有在其他城市的輸入中呼叫後無法打字的問題",

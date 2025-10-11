@@ -666,7 +666,7 @@ class LocalTTSPlayer:
                 self.log_message(f"發現新版本: {latest_version_str} (當前版本: {APP_VERSION})", "INFO")
                 download_url = latest_release["html_url"]
                 # 尋找名為 '橘Mouth.exe' 的 asset
-                asset = next((a for a in latest_release.get('assets', []) if a['name'] == '橘Mouth.exe'), None)
+                asset = next((a for a in latest_release.get('assets', []) if a['name'] == 'JuMouth.exe'), None)
                 if asset and getattr(sys, 'frozen', False): # 只在打包後的 .exe 中啟用自動更新
                     if messagebox.askyesno("發現新版本", f"檢測到新版本 {latest_version_str}！\n(您目前使用的是 {APP_VERSION})\n\n是否要立即下載並安裝更新？"):
                         self._start_update_process(asset['browser_download_url'])
@@ -699,7 +699,7 @@ class LocalTTSPlayer:
             # sys.executable 指向當前運行的 .exe 檔案
             exe_path = sys.executable
             exe_dir = os.path.dirname(exe_path)
-            new_exe_path = os.path.join(exe_dir, "橘Mouth_new.exe")
+            new_exe_path = os.path.join(exe_dir, "JuMouth_new.exe")
             updater_bat_path = os.path.join(exe_dir, "updater.bat")
 
             self.log_message(f"開始下載更新檔案從: {url}")

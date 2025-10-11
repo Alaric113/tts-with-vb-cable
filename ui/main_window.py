@@ -11,7 +11,7 @@ def build_main_window_ui(app):
     這個函式將所有 UI 元件附加到傳入的 app 實例上。
     """
     app.root = ctk.CTk()
-    app.root.title("橘Mouth - TTS 語音助手")
+    app.root.title("JuMouth - TTS 語音助手")
     app.root.geometry("680x720")
     app.root.resizable(False, False)
 

@@ -67,7 +67,7 @@ if __name__ == "__main__":
         messagebox.showinfo("提示", "應用程式已經在運行了。")
         # 嘗試找到已存在的視窗並將其帶到前景
         try:
-            hwnd = win32gui.FindWindow(None, "橘Mouth - TTS 語音助手")
+            hwnd = win32gui.FindWindow(None, "JuMouth - TTS 語音助手")
             if hwnd:
                 win32gui.SetForegroundWindow(hwnd)
         except Exception as e:
