@@ -4,6 +4,7 @@
 #      - SettingsWindow: 「設定」彈出視窗的完整 UI 與邏輯。
 #      - QuickPhrasesWindow: 「快捷語音」彈出視窗的完整 UI 與邏輯。
 
+from utils_deps import APP_VERSION
 import tkinter as tk
 import customtkinter as ctk
 from pynput import keyboard
@@ -15,7 +16,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.audio = app.audio
 
         self.title("設定")
-        self.geometry("450x450")
+        self.geometry("450x550")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
@@ -36,9 +37,18 @@ class SettingsWindow(ctk.CTkToplevel):
         if self.app.enable_quick_phrases:
             self.quick_phrase_switch.select()
 
+        # --- 啟動時自動運行服務 ---
+        auto_start_frame = ctk.CTkFrame(main_frame)
+        auto_start_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        ctk.CTkLabel(auto_start_frame, text="啟動時自動運行服務:").pack(side="left", padx=10, pady=10)
+        self.auto_start_switch = ctk.CTkSwitch(auto_start_frame, text="", command=self._on_toggle_auto_start)
+        self.auto_start_switch.pack(side="right", padx=10, pady=10)
+        if self.app.config.get("auto_start_service"):
+            self.auto_start_switch.select()
+
         # --- 快捷輸入框位置 ---
         position_label = ctk.CTkLabel(main_frame, text="快捷輸入框顯示位置:", font=ctk.CTkFont(weight="bold"))
-        position_label.grid(row=1, column=0, sticky="w", pady=(10, 0))
+        position_label.grid(row=2, column=0, sticky="w", pady=(10, 0))
 
         position_var = tk.StringVar(value=self.app.quick_input_position)
         positions = {
@@ -46,7 +56,7 @@ class SettingsWindow(ctk.CTkToplevel):
             "左下角": "bottom-left", "右下角": "bottom-right",
         }
         radio_frame = ctk.CTkFrame(main_frame)
-        radio_frame.grid(row=2, column=0, sticky="ew", pady=10)
+        radio_frame.grid(row=3, column=0, sticky="ew", pady=10)
         
         def on_position_change():
             self.app.quick_input_position = position_var.get()
@@ -60,7 +70,7 @@ class SettingsWindow(ctk.CTkToplevel):
 
         # --- 聆聽自己語音 ---
         listen_frame = ctk.CTkFrame(main_frame)
-        listen_frame.grid(row=3, column=0, sticky="ew", pady=10)
+        listen_frame.grid(row=4, column=0, sticky="ew", pady=10)
         listen_frame.grid_columnconfigure(1, weight=1)
         
         listen_switch_frame = ctk.CTkFrame(listen_frame, fg_color="transparent")
@@ -84,6 +94,16 @@ class SettingsWindow(ctk.CTkToplevel):
         self.listen_volume_label = ctk.CTkLabel(listen_frame, text=f"{self.audio.listen_volume:.2f}", width=40)
         self.listen_volume_label.grid(row=2, column=2, padx=10, pady=5, sticky="w")
         
+        # --- 檢查更新按鈕 ---
+        update_button = ctk.CTkButton(main_frame, text="檢查更新", command=lambda: self.app._check_for_updates(silent=False))
+        update_button.grid(row=5, column=0, pady=(20, 10), sticky="ew")
+
+        # --- 版本號標籤 ---
+        version_label = ctk.CTkLabel(main_frame, text=f"版本: {APP_VERSION}",
+                                     font=ctk.CTkFont(size=12), text_color="gray")
+        version_label.grid(row=6, column=0, pady=(0, 5), sticky="e")
+
+
         self._toggle_listen_controls()
 
     def _on_toggle_quick_phrases(self):
@@ -92,6 +112,11 @@ class SettingsWindow(ctk.CTkToplevel):
         self.app.config.set("enable_quick_phrases", self.app.enable_quick_phrases)
         if self.app.is_running:
             self.app._start_hotkey_listener()
+
+    def _on_toggle_auto_start(self):
+        auto_start = bool(self.auto_start_switch.get())
+        self.app.log_message(f"啟動時自動運行服務已 {'啟用' if auto_start else '停用'}")
+        self.app.config.set("auto_start_service", auto_start)
 
     def _on_toggle_listen_to_self(self):
         self.audio.enable_listen_to_self = bool(self.listen_switch.get())
@@ -186,14 +211,26 @@ class QuickPhrasesWindow(ctk.CTkToplevel):
 
         def on_release(key):
             hotkey_str = "+".join(sorted(list(pressed))) if pressed else ""
-            self.app.quick_phrases[index_to_edit]["hotkey"] = self.app._normalize_hotkey(hotkey_str)
-            self._update_phrase_text(index_to_edit)
+            normalized_hotkey = self.app._normalize_hotkey(hotkey_str)
+
+            # 衝突檢測
+            conflict_msg = self.app._check_hotkey_conflict(normalized_hotkey, 'quick_phrase', index_to_edit)
+            if conflict_msg:
+                messagebox.showwarning("快捷鍵衝突", conflict_msg)
+                # 恢復按鈕外觀，但不儲存新快捷鍵
+            else:
+                # 無衝突，儲存新快捷鍵
+                self.app.quick_phrases[index_to_edit]["hotkey"] = normalized_hotkey
+                self._update_phrase_text(index_to_edit)
+                self.app.log_message(f"快捷語音 {index_to_edit + 1} 的快捷鍵已設為: {normalized_hotkey or '無'}")
+
+            # 無論是否有衝突，都要恢復所有按鈕的狀態
             for p in self.app.quick_phrases:
                 btn = p.get("_btn_ref")
                 if btn:
                     btn.configure(text=p.get("hotkey") or "設定快捷鍵", state="normal", fg_color=ctk.ThemeManager.theme["CTkButton"]["fg_color"])
-            self.app.log_message(f"快捷語音 {index_to_edit + 1} 的快捷鍵已設為: {self.app.quick_phrases[index_to_edit]['hotkey'] or '無'}")
             self.app._quick_phrase_lock.release()
+
             if self.app.is_running:
                 self.app._start_hotkey_listener()
             return False

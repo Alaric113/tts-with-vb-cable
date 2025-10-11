@@ -26,6 +26,8 @@ class ConfigManager:
         "enable_listen_to_self": False,
         "listen_device_name": "Default",
         "listen_volume": 1.0,
+        "auto_start_service": False,
+        "text_history": [],
     }
 
     def __init__(self, log_func):
