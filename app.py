@@ -28,6 +28,7 @@ try:
     import comtypes.client  # noqa: F401
     from comtypes import CLSCTX_ALL  # noqa: F401
     comtypes_installed = True
+    import pythoncom
 except Exception:
     comtypes_installed = False
 try:
@@ -174,6 +175,9 @@ class LocalTTSPlayer:
 
     # ===================== 依賴流程 =====================
     def _dependency_flow_thread(self):
+        if IS_WINDOWS and comtypes_installed:
+            pythoncom.CoInitializeEx(0)
+
         self.log_message("開始檢查依賴...")
         dm = DependencyManager(
             log=self.log_message,
@@ -640,6 +644,9 @@ class LocalTTSPlayer:
 
     def _update_check_thread(self, silent=False):
         """在背景執行緒中執行的更新檢查邏輯。"""
+        if IS_WINDOWS and comtypes_installed:
+            pythoncom.CoInitializeEx(0)
+
         try:
             import requests
             from packaging.version import parse as parse_version
@@ -692,6 +699,9 @@ class LocalTTSPlayer:
 
     def _update_download_thread(self, url):
         """在背景執行緒中下載新版本並觸發更新腳本。"""
+        if IS_WINDOWS and comtypes_installed:
+            pythoncom.CoInitializeEx(0)
+
         try:
             import requests
             
