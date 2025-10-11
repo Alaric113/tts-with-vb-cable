@@ -1,9 +1,9 @@
 {
     "engine": "edge-tts",
     "voice": "zh-CN-XiaoxiaoNeural",
-    "rate": 175,
-    "volume": 1.0,
-    "hotkey": "<shift>+z",
+    "rate": 174,
+    "volume": 0.74,
+    "hotkey": "`",
     "quick_phrases": [
         {
             "text": "你好",
