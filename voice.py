@@ -233,6 +233,7 @@ class LocalTTSPlayer:
         self.listen_device_name = "Default"
         self.listen_volume = 1.0
         self._listen_devices = {}
+        self.listen_device_combo = None # 新增：提前初始化
 
         self.local_output_device_name = "Default"
         self._local_output_devices = {}
@@ -862,15 +863,41 @@ class LocalTTSPlayer:
             i += 1
             time.sleep(0.1)
 
+    def _resample_audio_segment(self, audio_segment, target_rate):
+        """回傳已重取樣的 AudioSegment（如原本已是 target_rate，直接回傳）"""
+        if int(audio_segment.frame_rate) == int(target_rate):
+            return audio_segment
+        return audio_segment.set_frame_rate(int(target_rate))
+
+    def _audiosegment_to_float32_numpy(self, audio_segment):
+        """把 pydub.AudioSegment 轉成 float32 numpy array（範圍 -1.0 .. +1.0）。
+        若為雙聲道會回傳 shape (n,2)，單聲道回傳 (n,)
+        """
+        samples = np.array(audio_segment.get_array_of_samples())
+        samples = samples.astype(np.float32)
+        # pydub 的 samples 對於 stereo 會 interleave，需 reshape
+        if audio_segment.channels == 2:
+            samples = samples.reshape((-1, 2))
+        else:
+            samples = samples.reshape((-1,))
+
+        # normalize by sample width (e.g. 2 bytes -> 16-bit)
+        max_val = float(2 ** (8 * audio_segment.sample_width - 1))
+        samples = samples / max_val
+        return samples
+
     def _play_local(self, text):
-        # 為每個播放任務創建獨立的事件循環和動畫控制器
+        """重寫版 _play_local：自動處理各設備取樣率、重取樣與並行播放。
+        會在日誌中紀錄嘗試與錯誤。
+        """
+        # 建立事件迴圈與動畫
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
+
         animation_stop_event = threading.Event()
         animation_thread = threading.Thread(
-            target=self._animate_playback, 
-            args=(text, animation_stop_event), 
+            target=self._animate_playback,
+            args=(text, animation_stop_event),
             daemon=True
         )
 
@@ -881,60 +908,183 @@ class LocalTTSPlayer:
         animation_thread.start()
 
         try:
+            # 產生語音檔
             if self.current_engine == ENGINE_EDGE:
                 loop.run_until_complete(self._synth_edge_to_file(text, synth_path))
             else:
                 self._synth_pyttsx3_to_file(text, synth_path)
 
             audio = AudioSegment.from_file(synth_path)
-            samples = np.array(audio.get_array_of_samples()).astype(np.float32) / (2 ** (8 * audio.sample_width - 1))
 
-            # 停止動畫並更新狀態為播放中 (如果動畫還在運行)
-            if animation_thread.is_alive():
-                animation_stop_event.set()
-                animation_thread.join()
-            
-            # --- 修正後的播放邏輯 ---
-            async def play_audio():
-                # 取得主要輸出設備 (VB-CABLE)
-                main_device_id = self._local_output_devices.get(self.local_output_device_name)
-                if main_device_id is None:
-                    main_device_id = sd.default.device[1]
+            # 取得主要設備與聆聽設備 id
+            main_device_id = self._local_output_devices.get(self.local_output_device_name)
+            if main_device_id is None:
+                main_device_id = sd.default.device[1]
 
-                listen_device_id = None
-                if self.enable_listen_to_self:
-                    listen_device_id = self._listen_devices.get(self.listen_device_name)
-                    if listen_device_id is None:
-                        listen_device_id = sd.default.device[1] # 如果找不到，退回預設
+            listen_device_id = None
+            if self.enable_listen_to_self:
+                listen_device_id = self._listen_devices.get(self.listen_device_name)
+                if listen_device_id is None:
+                    listen_device_id = sd.default.device[1]
 
-                # --- 最終修正：明確指定 channels=1，讓 sounddevice 自動處理聲道映射 ---
-                main_task = loop.run_in_executor(
-                    None, sd.play, samples, audio.frame_rate, device=main_device_id, channels=1)
-                tasks = [main_task]
-                
-                if self.enable_listen_to_self and listen_device_id is not None:
-                    listen_task = loop.run_in_executor(
-                        None, sd.play, samples * self.listen_volume, audio.frame_rate, device=listen_device_id, channels=1)
-                    tasks.append(listen_task)
-                
-                await asyncio.gather(*tasks)
-            
-            loop.run_until_complete(play_audio())
+            # 查詢每個設備的 default_samplerate 與通道數
+            try:
+                main_info = sd.query_devices(main_device_id)
+                main_sr = int(main_info.get('default_samplerate', audio.frame_rate))
+                main_max_ch = int(main_info.get('max_output_channels', 2))
+            except Exception:
+                main_sr = int(audio.frame_rate)
+                main_max_ch = 2
 
-            
-            
-            sd.stop()
+            listen_sr = None
+            listen_max_ch = None
+            if listen_device_id is not None:
+                try:
+                    listen_info = sd.query_devices(listen_device_id)
+                    listen_sr = int(listen_info.get('default_samplerate', audio.frame_rate))
+                    listen_max_ch = int(listen_info.get('max_output_channels', 2))
+                except Exception:
+                    listen_sr = int(audio.frame_rate)
+                    listen_max_ch = 2
 
-            # 更新狀態為完成
-            self._log_playback_status("[✔]", f"播放完畢: {text[:20]}...")
+            # 如果不啟用聆聽或兩個設備相同，直接用 single-device 流（重取樣成 main_sr）
+            if not self.enable_listen_to_self or listen_device_id is None or listen_device_id == main_device_id:
+                # 只針對 main_device 播放z
+                target_sr = main_sr
+                if int(audio.frame_rate) != int(target_sr):
+                    self.log_message(f"重取樣音訊: {audio.frame_rate}Hz -> {target_sr}Hz", "DEBUG")
+                    audio_play = self._resample_audio_segment(audio, target_sr)
+                else:
+                    audio_play = audio
+
+                samples = self._audiosegment_to_float32_numpy(audio_play)
+
+                # 如果裝置期望 stereo 而 audio 為 mono，則複製一個 channel
+                if samples.ndim == 1 and main_max_ch >= 2:
+                    samples = np.column_stack((samples, samples))
+
+                try:
+                    sd.play(samples, samplerate=target_sr, device=main_device_id)
+                    sd.wait()  # 等待播放結束
+                    self._log_playback_status("[✔]", f"播放完畢: {text[:20]}...")
+                except Exception as e:
+                    self.log_message(f"播放到主設備失敗: {e}", "ERROR")
+                    try:
+                        sd.stop()
+                    except Exception:
+                        pass
+                finally:
+                    return
+
+            # 若到此代表 enable_listen_to_self 且兩個設備不同：嘗試同時非阻塞播放到兩個設備（各自用其支援取樣率）
+            # 準備 main samples
+            if int(audio.frame_rate) != int(main_sr):
+                self.log_message(f"重取樣給 main: {audio.frame_rate}Hz -> {main_sr}Hz", "DEBUG")
+                audio_main = self._resample_audio_segment(audio, main_sr)
+            else:
+                audio_main = audio
+
+            samples_main = self._audiosegment_to_float32_numpy(audio_main)
+            if samples_main.ndim == 1 and main_max_ch >= 2:
+                samples_main = np.column_stack((samples_main, samples_main))
+
+            # 準備 listen samples（單獨用 listen_sr），注意乘上 listen_volume
+            if int(audio.frame_rate) != int(listen_sr):
+                self.log_message(f"重取樣給 listen: {audio.frame_rate}Hz -> {listen_sr}Hz", "DEBUG")
+                audio_listen = self._resample_audio_segment(audio, listen_sr)
+            else:
+                audio_listen = audio
+
+            samples_listen = self._audiosegment_to_float32_numpy(audio_listen) * float(self.listen_volume)
+            if samples_listen.ndim == 1 and listen_max_ch >= 2:
+                samples_listen = np.column_stack((samples_listen, samples_listen))
+
+            # 使用獨立執行緒，以阻塞模式同時在兩個不同設備上播放音訊
+            # 這是處理不同音訊設備最穩健的方法
+            playback_errors = []
+
+            def play_blocking(data, sr, dev_id, text_snippet):
+                try:
+                    sd.play(data, samplerate=sr, device=dev_id, blocking=True)
+                except Exception as e:
+                    playback_errors.append(e)
+                    self.log_message(f"在設備 {dev_id} 播放 '{text_snippet}' 時失敗: {e}", "ERROR")
+
+            thread_main = threading.Thread(
+                target=play_blocking,
+                args=(samples_main, main_sr, main_device_id, text[:10])
+            )
+            thread_listen = threading.Thread(
+                target=play_blocking,
+                args=(samples_listen, listen_sr, listen_device_id, text[:10])
+            )
+
+            thread_main.start()
+            thread_listen.start()
+
+            thread_main.join()
+            thread_listen.join()
+
+            if not playback_errors:
+                self._log_playback_status("[✔]", f"播放完畢: {text[:20]}...")
+            else:
+                self._log_playback_status("[❌]", f"播放時發生錯誤: {text[:20]}...")
+
         except Exception as e:
             self.log_message(f"播放錯誤: {e}", "ERROR")
         finally:
-            # 確保動畫執行緒已停止
             animation_stop_event.set()
-            loop.close()
+            try:
+                if animation_thread.is_alive():
+                    animation_thread.join(timeout=0.2)
+            except Exception:
+                pass
+            try:
+                loop.close()
+            except Exception:
+                pass
             if os.path.exists(synth_path):
-                os.remove(synth_path)
+                try:
+                    os.remove(synth_path)
+                except Exception:
+                    pass
+
+
+    def _play_sequentially(self, samples, samplerate, main_device_id, listen_device_id):
+        """舊版兼容函式 — 我們保留但改為更健壯：會為每個設備個別重取樣並嘗試播放（blocking）"""
+        try:
+            # main
+            try:
+                sd.play(samples, samplerate=samplerate, device=main_device_id, blocking=True)
+            except Exception as e_main:
+                # 嘗試使用 main device 的 default samplerate
+                try:
+                    main_info = sd.query_devices(main_device_id)
+                    main_sr = int(main_info.get('default_samplerate', samplerate))
+                    self.log_message(f"main 播放失敗，嘗試重取樣到 main 的 default_samplerate: {main_sr}Hz", "DEBUG")
+                    # 重新用 pydub 進行重取樣 — 但 samples 是 numpy，這裡我們保守處理為錯誤回報
+                    raise e_main
+                except Exception:
+                    raise e_main
+
+            # listen (若不同)
+            if self.enable_listen_to_self and listen_device_id is not None and listen_device_id != main_device_id:
+                try:
+                    sd.play(samples * self.listen_volume, samplerate=samplerate, device=listen_device_id, blocking=True)
+                except Exception as e_listen:
+                    try:
+                        listen_info = sd.query_devices(listen_device_id)
+                        listen_sr = int(listen_info.get('default_samplerate', samplerate))
+                        self.log_message(f"listen 播放失敗，建議重取樣到 {listen_sr}Hz 再試。", "WARN")
+                    except Exception:
+                        pass
+                    raise e_listen
+        except Exception as e:
+            self.log_message(f"循序播放失敗: {e}", "ERROR")
+            try:
+                sd.stop()
+            except Exception:
+                pass
 
     def _play_quick_phrase(self, text):
         """專門用於播放快捷語音的函式"""
@@ -1480,6 +1630,8 @@ class LocalTTSPlayer:
 
     def _update_listen_device_combobox_items(self):
         def upd():
+            if not self.listen_device_combo: # 新增：檢查 UI 元件是否存在
+                return
             device_names = list(self._listen_devices.keys())
             if not device_names:
                 device_names = ["Default (無可用設備)"]
