@@ -240,6 +240,7 @@ class LocalTTSPlayer:
         self.cable_is_present = False
         self._input_window_lock = threading.Lock() # 新增一個鎖來防止重複開啟輸入框
         self._quick_phrase_lock = threading.Lock() # 用於快捷語音錄製
+        self._playback_lock = threading.Lock() # 防止同時播放多個音訊
 
         self.hotkey_listener = None
         self.quick_input_window = None
@@ -990,7 +991,6 @@ class LocalTTSPlayer:
 
             # 準備 listen samples（單獨用 listen_sr），注意乘上 listen_volume
             if int(audio.frame_rate) != int(listen_sr):
-                self.log_message(f"重取樣給 listen: {audio.frame_rate}Hz -> {listen_sr}Hz", "DEBUG")
                 audio_listen = self._resample_audio_segment(audio, listen_sr)
             else:
                 audio_listen = audio
@@ -1668,3 +1668,4 @@ if __name__ == "__main__":
         # 捕獲頂層錯誤並顯示
         messagebox.showerror("嚴重錯誤", f"應用程式遇到無法處理的錯誤並即將關閉。\n\n錯誤訊息：\n{e}")
         sys.exit()
+()
