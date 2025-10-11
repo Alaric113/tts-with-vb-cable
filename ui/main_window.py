@@ -86,6 +86,9 @@ def build_main_window_ui(app):
     app.volume_value_label = ctk.CTkLabel(tts, text=f"{app.audio.tts_volume:.2f}", width=50)
     app.volume_value_label.grid(row=1, column=2, sticky="e", padx=15, pady=(5, 15))
     tts.grid_columnconfigure(1, weight=1)
+    # 修正: 應該在 tts 這個 Frame 容器上設定其內部的網格欄位
+    # 讓第二欄 (column 1, 包含 slider) 佔用多餘的空間
+    tts.grid_columnconfigure(1, weight=1) 
 
     # --- 快捷鍵設定 ---
     hotkey_frame = ctk.CTkFrame(app.root, corner_radius=CORNER_RADIUS, fg_color=FG_COLOR, border_color=app.BORDER_COLOR, border_width=1)
