@@ -1086,20 +1086,22 @@ class LocalTTSPlayer:
         # --- Windows 焦點強制取得 ---
         def force_foreground_and_focus(target_win):
             if not pywin32_installed or not target_win.winfo_exists():
+                # 非 Windows 或視窗已關閉，使用 tkinter 內建方法
+                target_win.lift()
+                target_win.focus_force()
                 return
 
             try:
                 # 取得視窗的 HWND (handle)
                 hwnd = target_win.winfo_id()
 
-                # 模擬 Alt 鍵按下再放開，這是 Windows 允許前景切換的技巧
-                win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
-                win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
-
                 # 將視窗帶到前景並設為焦點
                 win32gui.SetForegroundWindow(hwnd)
             except Exception as e:
-                self.log_message(f"強制前景失敗: {e}")
+                self.log_message(f"強制前景失敗: {e}", "WARN")
+                # 如果 API 呼叫失敗，退回使用 tkinter 的方法
+                target_win.lift()
+                target_win.focus_force()
 
         win.attributes("-topmost", True)
         win.attributes("-alpha", 0.95)
@@ -1139,10 +1141,6 @@ class LocalTTSPlayer:
                 if not win.winfo_exists():
                     return
 
-                # 先呼叫 Windows API 強制前景
-                force_foreground_and_focus(win)
-                win.lift()
-                win.focus_force()
                 entry.focus_set()
                 entry.select_range(0, tk.END)
             except Exception as e:
@@ -1156,7 +1154,9 @@ class LocalTTSPlayer:
                 if self._input_window_lock.locked():
                     self._input_window_lock.release()
 
-        win.after(10, secure_focus) # 稍微延遲以確保視窗已建立
+        # 延遲呼叫，確保視窗完全渲染後再設定焦點
+        win.after(10, lambda: force_foreground_and_focus(win))
+        win.after(20, secure_focus)
 
         def send(event=None):
             text = entry.get().strip()
