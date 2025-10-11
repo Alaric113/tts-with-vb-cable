@@ -26,9 +26,6 @@ from pydub import AudioSegment
 import edge_tts
 import pyttsx3
 
-# 匯入重構後的模組
-from audio_player import AudioPlayer
-
 # Windows 特定依賴（非強制）
 try:
     import comtypes.client  # noqa: F401
@@ -256,10 +253,6 @@ class LocalTTSPlayer:
         self._hotkey_recording_listener = None
         self._pressed_keys = set()
         self._is_hotkey_edit_mode = False
-
-        # 初始化服務
-        self.audio_player = AudioPlayer(self.log_message, self.get_config_value)
-        self._listen_devices = {} # 仍然由主程式管理設備列表
         self._recording_key_index = None # 記錄當前正在錄製哪個按鈕 (0, 1, 2)
         
         # 先顯示主視窗
@@ -279,13 +272,6 @@ class LocalTTSPlayer:
         self.listen_device_name = self._config.get("listen_device_name", "Default")
         self.listen_volume = self._config.get("listen_volume", 1.0)
         
-    def get_config_value(self, key, default=None):
-        """提供給其他模組獲取設定值的方法"""
-        # 優先從實例變數獲取，因為它代表了當前的UI狀態
-        if hasattr(self, key):
-            return getattr(self, key)
-        return self._config.get(key, default)
-
         # 先從設定檔更新變數
         self.current_hotkey = self._normalize_hotkey(self._config.get("hotkey", "<shift>+z"))
         self._update_hotkey_display(self.current_hotkey)
@@ -1065,8 +1051,6 @@ class LocalTTSPlayer:
 
 
     def _play_sequentially(self, samples, samplerate, main_device_id, listen_device_id):
-        finally:
-            self._playback_lock.release()
         """舊版兼容函式 — 我們保留但改為更健壯：會為每個設備個別重取樣並嘗試播放（blocking）"""
         try:
             # main
@@ -1656,8 +1640,6 @@ class LocalTTSPlayer:
                 self.listen_device_name = device_names[0] if device_names else "Default"
             self.listen_device_combo.set(self.listen_device_name)
         self.root.after(0, upd)
-        # ... (此函式可以移到 settings_window.py 中)
-        pass
 
     def run(self):
         self.root.mainloop()
