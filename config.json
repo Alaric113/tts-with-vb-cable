@@ -1,11 +1,54 @@
 {
-    "hotkey": "<shift>+z",
     "engine": "edge-tts",
-    "edge_voice": "zh-CN-XiaoxiaoNeural",
-    "pyttsx3_voice_id": null,
-    "rate": 178,
-    "volume": 0.76,
-    "output_device_name": "CABLE Input (VB-Audio Virtual C (id:11)",
-    "auto_start": true,
-    "voice": "zh-CN-YunxiNeural"
+    "voice": "zh-CN-XiaoxiaoNeural",
+    "rate": 175,
+    "volume": 1.0,
+    "hotkey": "<shift>+z",
+    "quick_phrases": [
+        {
+            "text": "你好",
+            "hotkey": "1"
+        },
+        {
+            "text": "許志寬",
+            "hotkey": "<f2>"
+        },
+        {
+            "text": "有聲音嗎",
+            "hotkey": "<f3>"
+        },
+        {
+            "text": "",
+            "hotkey": ""
+        },
+        {
+            "text": "",
+            "hotkey": ""
+        },
+        {
+            "text": "",
+            "hotkey": ""
+        },
+        {
+            "text": "",
+            "hotkey": ""
+        },
+        {
+            "text": "",
+            "hotkey": ""
+        },
+        {
+            "text": "",
+            "hotkey": ""
+        },
+        {
+            "text": "",
+            "hotkey": ""
+        }
+    ],
+    "quick_input_position": "bottom-right",
+    "enable_quick_phrases": true,
+    "enable_listen_to_self": true,
+    "listen_device_name": "Headphones (Realtek HD Audio 2nd output)",
+    "listen_volume": 0.62
 }

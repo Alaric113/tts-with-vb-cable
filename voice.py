@@ -12,6 +12,7 @@ import numpy as np
 import json
 import shutil
 import zipfile
+import functools
 import subprocess
 import time
 import ctypes
@@ -225,17 +226,27 @@ class LocalTTSPlayer:
         self.tts_rate = 175
         self.tts_volume = 1.0
         self.current_hotkey = "+z"
+        self.quick_phrases = [] # 新增：快捷語音列表
+        self.quick_input_position = "bottom-right" # 新增：輸入框位置設定
+        self.enable_quick_phrases = True
+        self.enable_listen_to_self = False
+        self.listen_device_name = "Default"
+        self.listen_volume = 1.0
+        self._listen_devices = {}
 
         self.local_output_device_name = "Default"
         self._local_output_devices = {}
         self.cable_is_present = False
         self._input_window_lock = threading.Lock() # 新增一個鎖來防止重複開啟輸入框
+        self._quick_phrase_lock = threading.Lock() # 用於快捷語音錄製
 
         self.hotkey_listener = None
         self.quick_input_window = None
+        self.settings_window = None # 新增：設定視窗的引用
         self._pyttsx3_engine = None
         self._pyttsx3_voices = []
         self._edge_voices = []
+        self.quick_phrases_window = None # 新增：快捷語音視窗的引用
         
         self._hotkey_recording_listener = None
         self._pressed_keys = set()
@@ -252,6 +263,12 @@ class LocalTTSPlayer:
         self.edge_voice = self._config.get("voice", DEFAULT_EDGE_VOICE)
         self.tts_rate = self._config.get("rate", 175)
         self.tts_volume = self._config.get("volume", 1.0)
+        self.quick_phrases = self._config.get("quick_phrases", [])
+        self.quick_input_position = self._config.get("quick_input_position", "bottom-right")
+        self.enable_quick_phrases = self._config.get("enable_quick_phrases", True)
+        self.enable_listen_to_self = self._config.get("enable_listen_to_self", False)
+        self.listen_device_name = self._config.get("listen_device_name", "Default")
+        self.listen_volume = self._config.get("listen_volume", 1.0)
         
         # 先從設定檔更新變數
         self.current_hotkey = self._normalize_hotkey(self._config.get("hotkey", "<shift>+z"))
@@ -263,8 +280,8 @@ class LocalTTSPlayer:
     # ================ UI 建構與進度列 =================
     def _build_ui(self):
         self.root = ctk.CTk()
-        self.root.title("橘Mouth")
-        self.root.geometry("620x720")
+        self.root.title("橘Mouth - TTS 語音助手")
+        self.root.geometry("680x720")
         self.root.resizable(False, False)
         
         # --- 全域 UI 設定 ---
@@ -292,9 +309,18 @@ class LocalTTSPlayer:
         self.stop_button = ctk.CTkButton(ctrl, text="■ 停止", command=self.stop_local_player, state="disabled", fg_color="#D32F2F", hover_color="#B71C1C", corner_radius=CORNER_RADIUS)
         self.stop_button.grid(row=0, column=1, padx=15, pady=15)
 
+        # 使用一個空的 Label 來做彈性間隔
+        spacer = ctk.CTkLabel(ctrl, text="")
+        spacer.grid(row=0, column=2, sticky="ew")
+        ctrl.grid_columnconfigure(2, weight=1) # 讓 spacer 填滿空間
+
+        self.quick_phrase_button = ctk.CTkButton(ctrl, text="快捷語音", command=self._open_quick_phrases_window, corner_radius=CORNER_RADIUS, fg_color=self.BTN_COLOR, hover_color=self.BTN_HOVER_COLOR)
+        self.quick_phrase_button.grid(row=0, column=3, padx=(0, 10), pady=15)
+        self.settings_button = ctk.CTkButton(ctrl, text="⚙️", command=self._open_settings_window, width=40, corner_radius=CORNER_RADIUS, fg_color=self.BTN_COLOR, hover_color=self.BTN_HOVER_COLOR)
+        self.settings_button.grid(row=0, column=4, padx=(0, 15), pady=15)
+
         self.status_label = ctk.CTkLabel(ctrl, text="● 未啟動", text_color=["#D32F2F", "#FF5252"], font=ctk.CTkFont(size=14, weight="bold"))
-        self.status_label.grid(row=0, column=2, padx=20, sticky="e")
-        ctrl.grid_columnconfigure(2, weight=1) # 讓狀態標籤靠右
+        self.status_label.grid(row=0, column=5, padx=20, sticky="e")
 
         out = ctk.CTkFrame(self.root, corner_radius=CORNER_RADIUS, fg_color=FG_COLOR, border_color=self.BORDER_COLOR, border_width=1)
         out.grid(row=1, column=0, sticky="ew", padx=PAD_X, pady=PAD_Y)
@@ -468,7 +494,21 @@ class LocalTTSPlayer:
             self._config["voice"] = self._config.get("voice", "default")
         self._config["rate"] = self.tts_rate
         self._config["volume"] = self.tts_volume
+
+        # 創建一個乾淨的快捷語音列表來儲存，移除UI元件的引用
+        clean_quick_phrases = []
+        for phrase in self.quick_phrases:
+            clean_quick_phrases.append({
+                "text": phrase.get("text", ""),
+                "hotkey": phrase.get("hotkey", "")
+            })
         self._config["hotkey"] = self.current_hotkey
+        self._config["quick_phrases"] = clean_quick_phrases
+        self._config["quick_input_position"] = self.quick_input_position
+        self._config["enable_quick_phrases"] = self.enable_quick_phrases
+        self._config["enable_listen_to_self"] = self.enable_listen_to_self
+        self._config["listen_device_name"] = self.listen_device_name
+        self._config["listen_volume"] = self.listen_volume
         try:
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self._config, f, indent=4, ensure_ascii=False)
@@ -690,6 +730,7 @@ class LocalTTSPlayer:
             asyncio.run(self._load_edge_voices())
             self._load_local_devices()
             self.root.after(0, self._update_ui_after_load)
+            self.log_message("依賴與設備載入完成。")
         except Exception as e:
             self.log_message(f"初始化錯誤: {e}", "ERROR")
 
@@ -698,6 +739,7 @@ class LocalTTSPlayer:
         self.speed_slider.set(self.tts_rate)
         self.volume_slider.set(self.tts_volume)
         self._update_voice_combobox_items()
+        self._update_listen_device_combobox_items()
         self._update_local_device_combobox_items()
 
     async def _load_edge_voices(self):
@@ -711,6 +753,7 @@ class LocalTTSPlayer:
         try:
             devices = sd.query_devices()
             output_devices = [d for d in devices if d['max_output_channels'] > 0]
+            self._listen_devices = {d['name']: d['index'] for d in output_devices}
             self._local_output_devices = {d['name']: d['index'] for d in output_devices}
             found_cable = False
             for d in output_devices:
@@ -762,32 +805,26 @@ class LocalTTSPlayer:
             if self.hotkey_listener:
                 self.hotkey_listener.stop()
 
-            # --- 改用手動監聽，解決 GlobalHotKeys 的誤觸問題 ---
-            currently_pressed = set()
-            target_keys = set(self._normalize_hotkey(self.current_hotkey).split('+'))
+            # 組合所有需要監聽的快捷鍵
+            hotkeys = {}
+            # 主輸入框快捷鍵
+            if self.current_hotkey:
+                hotkeys[self.current_hotkey] = self._show_quick_input
+            
+            # 快捷語音
+            if self.enable_quick_phrases:
+                for phrase in self.quick_phrases:
+                    hk = phrase.get("hotkey")
+                    text = phrase.get("text")
+                    if hk and text:
+                        # 使用 functools.partial 捕獲當前的 text 值
+                        hotkeys[hk] = functools.partial(self._play_quick_phrase, text)
 
-            def on_press(key):
-                if not self.is_running:
-                    return
-                
-                key_str = self._key_to_str(key)
-                if key_str:
-                    currently_pressed.add(key_str)
-
-                # 檢查當前按下的鍵是否與目標完全匹配
-                if currently_pressed == target_keys:
-                    self.root.after(0, self._show_quick_input)
-
-            def on_release(key):
-                key_str = self._key_to_str(key)
-                if key_str in currently_pressed:
-                    currently_pressed.remove(key_str)
-
-            self.hotkey_listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+            self.hotkey_listener = keyboard.GlobalHotKeys(hotkeys)
             self.hotkey_listener.start()
-            self.log_message(f"全域快捷鍵 '{self.current_hotkey}' 已啟用")
+            self.log_message(f"服務已啟動，監聽 {len(hotkeys)} 個快捷鍵。")
         except Exception as e:
-            self.log_message(f"快捷鍵 '{self.current_hotkey}' 啟動失敗: {e}。請檢查格式是否符合 pynput 要求。", "ERROR")
+            self.log_message(f"快捷鍵啟動失敗: {e}。請檢查格式。", "ERROR")
 
     def _key_to_str(self, key):
         """將 pynput 的 key 物件轉換為標準化字串"""
@@ -852,16 +889,40 @@ class LocalTTSPlayer:
             audio = AudioSegment.from_file(synth_path)
             samples = np.array(audio.get_array_of_samples()).astype(np.float32) / (2 ** (8 * audio.sample_width - 1))
 
-            device_id = self._local_output_devices.get(self.local_output_device_name)
-            if device_id is None:
-                device_id = sd.default.device[1]
-
             # 停止動畫並更新狀態為播放中 (如果動畫還在運行)
             if animation_thread.is_alive():
                 animation_stop_event.set()
                 animation_thread.join()
+            
+            # --- 修正後的播放邏輯 ---
+            async def play_audio():
+                # 取得主要輸出設備 (VB-CABLE)
+                main_device_id = self._local_output_devices.get(self.local_output_device_name)
+                if main_device_id is None:
+                    main_device_id = sd.default.device[1]
 
-            sd.play(samples, samplerate=audio.frame_rate, device=device_id, blocking=True)
+                listen_device_id = None
+                if self.enable_listen_to_self:
+                    listen_device_id = self._listen_devices.get(self.listen_device_name)
+                    if listen_device_id is None:
+                        listen_device_id = sd.default.device[1] # 如果找不到，退回預設
+
+                # --- 最終修正：明確指定 channels=1，讓 sounddevice 自動處理聲道映射 ---
+                main_task = loop.run_in_executor(
+                    None, sd.play, samples, audio.frame_rate, device=main_device_id, channels=1)
+                tasks = [main_task]
+                
+                if self.enable_listen_to_self and listen_device_id is not None:
+                    listen_task = loop.run_in_executor(
+                        None, sd.play, samples * self.listen_volume, audio.frame_rate, device=listen_device_id, channels=1)
+                    tasks.append(listen_task)
+                
+                await asyncio.gather(*tasks)
+            
+            loop.run_until_complete(play_audio())
+
+            
+            
             sd.stop()
 
             # 更新狀態為完成
@@ -874,6 +935,12 @@ class LocalTTSPlayer:
             loop.close()
             if os.path.exists(synth_path):
                 os.remove(synth_path)
+
+    def _play_quick_phrase(self, text):
+        """專門用於播放快捷語音的函式"""
+        if not self.is_running:
+            return
+        threading.Thread(target=self._play_local, args=(text,), daemon=True).start()
 
     # ================ Hotkey 與回呼（新版獨立錄製） =================
     def _format_keys(self, keys):
@@ -1082,6 +1149,7 @@ class LocalTTSPlayer:
             return
 
         win = ctk.CTkToplevel(self.root)
+        win.overrideredirect(True) # 隱藏視窗的標題列和邊框
         
         # --- Windows 焦點強制取得 ---
         def force_foreground_and_focus(target_win):
@@ -1110,65 +1178,290 @@ class LocalTTSPlayer:
         w, h = 420, 38
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
-        x = int(screen_w - w - 20)
-        y = int(screen_h - h - 50)
-        win.geometry(f"{w}x{h}+{x}+{y}")
+        
+        # 根據設定計算位置
+        if self.quick_input_position == "center":
+            x = (screen_w - w) // 2
+            y = (screen_h - h) // 2
+        elif self.quick_input_position == "top-left":
+            x = 20
+            y = 50
+        elif self.quick_input_position == "top-right":
+            x = screen_w - w - 20
+            y = 50
+        elif self.quick_input_position == "bottom-left":
+            x = 20
+            y = screen_h - h - 50
+        else: # 預設 "bottom-right"
+            x = screen_w - w - 20
+            y = screen_h - h - 50
 
+        win.geometry(f"{w}x{h}+{x}+{y}")
         entry = ctk.CTkEntry(win, font=("Arial", 14), height=h)
         entry.pack(fill="both", expand=True, padx=2, pady=2)
 
-        def close_window_if_lost_focus(event=None):
-            def check_and_close():
+        def on_destroy(event=None):
+            # 確保視窗銷毀時鎖被釋放
+            if self._input_window_lock.locked():
+                self._input_window_lock.release()
+
+        def close_if_focus_lost(event=None):
+            # 延遲檢查，避免因短暫的焦點切換而關閉視窗
+            def _check():
                 if not win.winfo_exists():
                     return
-                if not win._focus_established:
-                    return
-                current_focus_widget = win.focus_get()
-                try:
-                    focus_toplevel = current_focus_widget.winfo_toplevel() if current_focus_widget else None
-                    focus_is_on_self = (focus_toplevel is win)
-                except Exception:
-                    focus_is_on_self = False
-                if win._focus_established and current_focus_widget != entry and current_focus_widget != win and not focus_is_on_self:
-                    # self.log_message("輸入框失去焦點，自動關閉。") # 這條日誌太頻繁，可以選擇性關閉
+                
+                # 如果當前的焦點不在這個視窗的任何元件上，就關閉它
+                focused_widget = win.focus_get()
+                if focused_widget is None or focused_widget.winfo_toplevel() is not win:
                     win.destroy()
-            win.after(150, check_and_close)
+            
+            win.after(100, _check)
 
         def secure_focus():
-            # 確保在釋放鎖之前，視窗的焦點已經設定好
-            # 這樣可以防止在焦點設定完成前，使用者再次觸發快捷鍵
             try:
                 if not win.winfo_exists():
+                    on_destroy() # 如果視窗在獲取焦點前被關閉，也要釋放鎖
                     return
 
                 entry.focus_set()
                 entry.select_range(0, tk.END)
             except Exception as e:
                 self.log_message(f"Focus attempt failed: {e}", "ERROR")
-            finally:
-                # 將焦點相關的綁定和狀態設定移到 finally 區塊
-                win.bind("<FocusOut>", close_window_if_lost_focus)
-                entry.bind("<FocusOut>", close_window_if_lost_focus)
-                win.after(50, lambda: setattr(win, '_focus_established', True)) # 縮短延遲
-                # 確保在所有操作後釋放鎖
-                if self._input_window_lock.locked():
-                    self._input_window_lock.release()
 
         # 延遲呼叫，確保視窗完全渲染後再設定焦點
         win.after(10, lambda: force_foreground_and_focus(win))
         win.after(20, secure_focus)
 
+        # 綁定事件
         def send(event=None):
             text = entry.get().strip()
             if text:
                 threading.Thread(target=self._play_local, args=(text,), daemon=True).start()
-            if self._input_window_lock.locked():
-                self._input_window_lock.release()
             win.destroy()
 
         entry.bind("<Return>", send)
-        entry.bind("<Escape>", lambda e: win.destroy())
+        win.bind("<Escape>", lambda e: win.destroy())
+        win.bind("<FocusOut>", close_if_focus_lost)
+        win.bind("<Destroy>", on_destroy)
+
         self.quick_input_window = win
+
+    def _open_settings_window(self):
+        if self.settings_window and self.settings_window.winfo_exists():
+            self.settings_window.focus()
+            return
+
+        self.settings_window = ctk.CTkToplevel(self.root)
+        self.settings_window.title("設定")
+        self.settings_window.geometry("450x450")
+        self.settings_window.resizable(False, False)
+        self.settings_window.transient(self.root) # 讓設定視窗保持在主視窗之上
+        self.settings_window.grab_set() # 獨佔焦點
+
+        main_frame = ctk.CTkFrame(self.settings_window, fg_color="transparent")
+        main_frame.pack(padx=20, pady=20, fill="both", expand=True)
+
+        # --- 快捷語音開關 ---
+        quick_phrase_frame = ctk.CTkFrame(main_frame)
+        quick_phrase_frame.pack(fill="x", pady=(0, 10))
+        ctk.CTkLabel(quick_phrase_frame, text="快捷語音功能:").pack(side="left", padx=10, pady=10)
+        self.quick_phrase_switch = ctk.CTkSwitch(quick_phrase_frame, text="", command=self._on_toggle_quick_phrases)
+        self.quick_phrase_switch.pack(side="right", padx=10, pady=10)
+        if self.enable_quick_phrases:
+            self.quick_phrase_switch.select()
+
+        ctk.CTkLabel(main_frame, text="快捷輸入框顯示位置:", font=ctk.CTkFont(weight="bold")).pack(anchor="w")
+
+        position_var = ctk.StringVar(value=self.quick_input_position)
+        positions = {
+            "螢幕中央": "center",
+            "左上角": "top-left",
+            "右上角": "top-right",
+            "左下角": "bottom-left",
+            "右下角": "bottom-right",
+        }
+
+        def on_position_change():
+            self.quick_input_position = position_var.get()
+            self.log_message(f"輸入框位置已設定為: {self.quick_input_position}")
+            self._save_config()
+
+        # 使用 RadioButton 讓選項更清晰
+        radio_frame = ctk.CTkFrame(main_frame)
+        radio_frame.pack(pady=10, fill="x")
+
+        for i, (text, value) in enumerate(positions.items()):
+            rb = ctk.CTkRadioButton(radio_frame, text=text, variable=position_var, value=value, command=on_position_change)
+            if i < 3:
+                rb.grid(row=0, column=i, padx=10, pady=5, sticky="w")
+            else:
+                rb.grid(row=1, column=i-3, padx=10, pady=5, sticky="w")
+        
+        # --- 聆聽自己的語音 ---
+        listen_frame = ctk.CTkFrame(main_frame)
+        listen_frame.pack(fill="x", expand=True, pady=10)
+        listen_frame.grid_columnconfigure(1, weight=1)
+
+        listen_switch_frame = ctk.CTkFrame(listen_frame, fg_color="transparent")
+        listen_switch_frame.grid(row=0, column=0, columnspan=3, sticky="ew")
+        ctk.CTkLabel(listen_switch_frame, text="聆聽自己的語音:").pack(side="left", padx=10, pady=10)
+        self.listen_switch = ctk.CTkSwitch(listen_switch_frame, text="", command=self._on_toggle_listen_to_self)
+        self.listen_switch.pack(side="right", padx=10, pady=10)
+        if self.enable_listen_to_self:
+            self.listen_switch.select()
+
+        ctk.CTkLabel(listen_frame, text="聆聽設備:").grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.listen_device_combo = ctk.CTkOptionMenu(listen_frame, values=["Default"], command=self._on_listen_device_change)
+        self.listen_device_combo.grid(row=1, column=1, columnspan=2, padx=10, pady=5, sticky="ew")
+
+        ctk.CTkLabel(listen_frame, text="聆聽音量:").grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        self.listen_volume_slider = ctk.CTkSlider(listen_frame, from_=0.0, to=1.0, command=self._on_listen_volume_change)
+        self.listen_volume_slider.set(self.listen_volume)
+        self.listen_volume_slider.grid(row=2, column=1, padx=10, pady=5, sticky="ew")
+        self.listen_volume_label = ctk.CTkLabel(listen_frame, text=f"{self.listen_volume:.2f}", width=40)
+        self.listen_volume_label.grid(row=2, column=2, padx=10, pady=5, sticky="w")
+
+        self._update_listen_device_combobox_items()
+        self._toggle_listen_controls()
+
+    def _on_toggle_quick_phrases(self):
+        self.enable_quick_phrases = bool(self.quick_phrase_switch.get())
+        self.log_message(f"快捷語音功能已 {'啟用' if self.enable_quick_phrases else '停用'}")
+        self._save_config()
+        if self.is_running:
+            self._start_hotkey_listener()
+
+    def _on_toggle_listen_to_self(self):
+        self.enable_listen_to_self = bool(self.listen_switch.get())
+        self.log_message(f"聆聽自己的語音功能已 {'啟用' if self.enable_listen_to_self else '停用'}")
+        self._toggle_listen_controls()
+        self._save_config()
+
+    def _toggle_listen_controls(self):
+        state = "normal" if self.enable_listen_to_self else "disabled"
+        self.listen_device_combo.configure(state=state)
+        self.listen_volume_slider.configure(state=state)
+        self.listen_volume_label.configure(state=state)
+
+    def _on_listen_device_change(self, choice):
+        self.listen_device_name = choice
+        self.log_message(f"聆聽設備已設定為: {self.listen_device_name}")
+        self._save_config()
+
+    def _on_listen_volume_change(self, value):
+        self.listen_volume = round(value, 2)
+        self.listen_volume_label.configure(text=f"{self.listen_volume:.2f}")
+        self._save_config()
+
+    def _open_quick_phrases_window(self):
+        if self.quick_phrases_window and self.quick_phrases_window.winfo_exists():
+            self.quick_phrases_window.focus()
+            return
+
+        # 確保 quick_phrases 列表長度為 10
+        while len(self.quick_phrases) < 10:
+            self.quick_phrases.append({"text": "", "hotkey": ""})
+        self.quick_phrases = self.quick_phrases[:10]
+
+        self.quick_phrases_window = ctk.CTkToplevel(self.root)
+        self.quick_phrases_window.title("快捷語音設定")
+        self.quick_phrases_window.geometry("600x550")
+        self.quick_phrases_window.transient(self.root)
+        self.quick_phrases_window.grab_set()
+
+        # --- UI 結構 ---
+        self.phrase_list_frame = ctk.CTkScrollableFrame(self.quick_phrases_window, label_text="快捷語音列表")
+        self.phrase_list_frame.pack(padx=20, pady=20, fill="both", expand=True)
+
+        # 建立 10 個固定的欄位
+        for index in range(10):
+            phrase = self.quick_phrases[index]
+
+            item_frame = ctk.CTkFrame(self.phrase_list_frame, fg_color=("gray90", "gray20"))
+            item_frame.pack(fill="x", pady=5, padx=5)
+            item_frame.grid_columnconfigure(0, weight=1)
+
+            # 文字輸入框
+            entry = ctk.CTkEntry(item_frame, placeholder_text=f"快捷語音 {index + 1}...")
+            entry.insert(0, phrase.get("text", ""))
+            entry.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+            
+            # 綁定事件，當文字變更時自動儲存
+            entry.bind("<FocusOut>", lambda event, i=index, e=entry: self._update_phrase_text(i, e.get()))
+            entry.bind("<Return>", lambda event, i=index, e=entry: self._update_phrase_text(i, e.get(), True))
+
+            # 快捷鍵按鈕
+            hotkey_btn = ctk.CTkButton(item_frame, text=phrase.get("hotkey", "設定快捷鍵"), width=120,
+                                       command=lambda i=index: self._record_quick_phrase_hotkey(i))
+            hotkey_btn.grid(row=0, column=1, padx=10, pady=10)
+
+            # 將 UI 元件的引用儲存起來，方便後續更新
+            phrase["_entry_ref"] = entry
+            phrase["_btn_ref"] = hotkey_btn
+
+    def _update_phrase_text(self, index, text, unfocus=False):
+        """更新指定索引的快捷語音文字並儲存"""
+        # 從 UI 元件取得最新文字並更新到資料結構中
+        current_text = self.quick_phrases[index]["_entry_ref"].get()
+        self.quick_phrases[index]["text"] = current_text.strip()
+        
+        self._save_config()
+        self.log_message(f"快捷語音 {index + 1} 已更新。")
+        if unfocus:
+            self.quick_phrases_window.focus() # 取消 entry 的焦點
+
+    def _record_quick_phrase_hotkey(self, index_to_edit):
+        if not self._quick_phrase_lock.acquire(blocking=False):
+            self.log_message("已在錄製另一個快捷鍵，請先完成。", "WARN")
+            return
+
+        # 讓所有按鈕變暗，除了當前這個
+        for p in self.quick_phrases:
+            btn = p.get("_btn_ref")
+            if btn:
+                btn.configure(state="disabled", fg_color="gray50")
+
+        current_btn = self.quick_phrases[index_to_edit]["_btn_ref"]
+        current_btn.configure(text="錄製中...", state="normal", fg_color="#FFA726")
+
+        pressed = set()
+
+        def on_press(key):
+            key_str = self._key_to_str(key)
+            if key_str:
+                pressed.add(key_str)
+                current_btn.configure(text="+".join(sorted(list(pressed))))
+
+        def on_release(key):
+            hotkey_str = "+".join(sorted(list(pressed))) if pressed else ""
+            self.quick_phrases[index_to_edit]["hotkey"] = self._normalize_hotkey(hotkey_str)
+            # 同步更新對應的文字
+            current_text = self.quick_phrases[index_to_edit]["_entry_ref"].get()
+            self.quick_phrases[index_to_edit]["text"] = current_text.strip()
+            
+            self._save_config()
+            # 重繪所有按鈕的狀態
+            for idx, p in enumerate(self.quick_phrases):
+                btn = p.get("_btn_ref")
+                if btn:
+                    btn.configure(
+                        text=p.get("hotkey") or "設定快捷鍵",
+                        state="normal",
+                        fg_color=ctk.ThemeManager.theme["CTkButton"]["fg_color"]
+                    )
+            
+            self.log_message(f"快捷語音 {index_to_edit + 1} 的快捷鍵已設為: {self.quick_phrases[index_to_edit]['hotkey'] or '無'}")
+            self._quick_phrase_lock.release()
+            
+            # 如果服務正在運行，立即重啟監聽器以應用變更
+            if self.is_running:
+                self._start_hotkey_listener()
+            
+            return False # 停止監聽
+
+        listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+        listener.start()
 
     def on_closing(self):
         if self.hotkey_listener:
@@ -1176,7 +1469,25 @@ class LocalTTSPlayer:
                 self.hotkey_listener.stop()
             except Exception:
                 pass
+        # 確保主視窗關閉時，如果輸入框還存在，也一併關閉
+        if self.quick_input_window and self.quick_input_window.winfo_exists():
+            self.quick_input_window.destroy()
+        if self.settings_window and self.settings_window.winfo_exists():
+            self.settings_window.destroy()
+        if self.quick_phrases_window and self.quick_phrases_window.winfo_exists():
+            self.quick_phrases_window.destroy()
         self.root.destroy()
+
+    def _update_listen_device_combobox_items(self):
+        def upd():
+            device_names = list(self._listen_devices.keys())
+            if not device_names:
+                device_names = ["Default (無可用設備)"]
+            self.listen_device_combo.configure(values=device_names)
+            if self.listen_device_name not in device_names:
+                self.listen_device_name = device_names[0] if device_names else "Default"
+            self.listen_device_combo.set(self.listen_device_name)
+        self.root.after(0, upd)
 
     def run(self):
         self.root.mainloop()
