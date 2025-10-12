@@ -4,7 +4,7 @@
 #      - SettingsWindow: 「設定」彈出視窗的完整 UI 與邏輯。
 #      - QuickPhrasesWindow: 「快捷語音」彈出視窗的完整 UI 與邏輯。
 
-from utils.deps import APP_VERSION
+from ..utils.deps import APP_VERSION
 import tkinter as tk
 import customtkinter as ctk
 from pynput import keyboard

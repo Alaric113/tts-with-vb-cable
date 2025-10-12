@@ -12,9 +12,13 @@ AppPublisherURL=https://github.com/Alaric113/tts-with-vb-cable
 AppSupportURL=https://github.com/Alaric113/tts-with-vb-cable/issues
 AppUpdatesURL=https://github.com/Alaric113/tts-with-vb-cable/releases
 
-; 預設安裝目錄。{autopf} 會自動解析為 "C:\Program Files (x86)" 或 "C:\Program Files"
-DefaultDirName={autopf}\JuMouth
-DisableDirPage=no
+; 預設安裝目錄。{localappdata} 會自動解析為 "C:\Users\<使用者>\AppData\Local"
+; 這與 config.json 和 ffmpeg 的儲存位置一致。
+DefaultDirName={localappdata}\JuMouth
+; 因為是安裝到使用者目錄，所以不需要管理員權限。
+PrivilegesRequired=lowest
+; 由於路徑是固定的，直接隱藏目錄選擇頁面，簡化安裝流程。
+DisableDirPage=yes
 DefaultGroupName=JuMouth TTS
 
 ; 輸出設定

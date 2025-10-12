@@ -7,7 +7,7 @@ import os
 import shutil
 from datetime import datetime
 
-from utils.deps import CONFIG_FILE, ENGINE_EDGE, DEFAULT_EDGE_VOICE
+from ..utils.deps import CONFIG_FILE, ENGINE_EDGE, DEFAULT_EDGE_VOICE
 
 class ConfigManager:
     """

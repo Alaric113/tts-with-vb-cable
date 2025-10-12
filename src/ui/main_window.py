@@ -3,7 +3,7 @@
 # 功用: 負責建構主應用程式視窗的所有 UI 元件。
 
 import customtkinter as ctk
-from utils.deps import CABLE_INPUT_HINT, ENGINE_EDGE, ENGINE_PYTTX3
+from ..utils.deps import CABLE_INPUT_HINT, ENGINE_EDGE, ENGINE_PYTTX3
 
 def build_main_window_ui(app):
     """

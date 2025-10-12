@@ -21,7 +21,7 @@ import pyttsx3
 from datetime import datetime
 import queue
 
-from utils.deps import ( # This is correct
+from ..utils.deps import (
     DEFAULT_EDGE_VOICE, ENGINE_EDGE, ENGINE_PYTTX3
 )
 

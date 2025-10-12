@@ -1,13 +1,11 @@
 customtkinter
 pynput
 sounddevice
+numpy
 pydub
 edge-tts
 pyttsx3
-numpy
-# Windows-specific libraries
-comtypes; platform_system == "Windows"
-pywin32; platform_system == "Windows"
-pyinstaller; platform_system == "Windows"
-
-
+requests
+packaging
+comtypes; sys_platform == 'win32'
+pywin32; sys_platform == 'win32'

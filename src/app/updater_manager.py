@@ -8,8 +8,7 @@ import threading
 import webbrowser
 import requests
 from packaging.version import parse as parse_version
-
-from utils.deps import APP_VERSION, GITHUB_REPO, IS_WINDOWS # This is correct
+from ..utils.deps import APP_VERSION, GITHUB_REPO, IS_WINDOWS
 
 # 可選 Windows 依賴
 try:
@@ -123,8 +122,12 @@ class UpdateManager:
                 exe_path
             ]
 
-            # 使用 DETACHED_PROCESS 確保更新精靈與主程式完全脫鉤
-            subprocess.Popen(command, creationflags=subprocess.DETACHED_PROCESS, close_fds=True)
+            # 使用 DETACHED_PROCESS 確保更新精靈與主程式完全脫鉤。
+            # 將從主程式傳入的 startupinfo 物件傳遞給 Popen，以確保在需要時能隱藏視窗。
+            subprocess.Popen(
+                command,
+                creationflags=subprocess.DETACHED_PROCESS, close_fds=True, startupinfo=self.app.startupinfo
+            )
             
             self.app.root.after(1000, self.app.on_closing)
 

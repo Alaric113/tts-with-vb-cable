@@ -1,8 +1,8 @@
 {
     "engine": "edge-tts",
-    "voice": "zh-CN-YunyeNeural",
-    "rate": 174,
-    "volume": 0.74,
+    "voice": "zh-CN-XiaorouNeural",
+    "rate": 175,
+    "volume": 1.0,
     "hotkey": "`",
     "quick_phrases": [
         {
@@ -50,9 +50,13 @@
     "enable_quick_phrases": false,
     "enable_listen_to_self": true,
     "listen_device_name": "Realtek HD Audio 2nd output (Realtek(R) Audio)",
-    "listen_volume": 0.06,
+    "listen_volume": 0.14,
     "auto_start_service": true,
     "text_history": [
+        "321",
+        "456",
+        "123",
+        "45",
         "愛上了嗎",
         "在幫我下再一下",
         "就不用到網頁自己下載了",
@@ -69,5 +73,6 @@
         "你",
         "你好",
         "測試"
-    ]
+    ],
+    "pitch": 34
 }

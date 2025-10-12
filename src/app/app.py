@@ -41,24 +41,25 @@ try:
 except ImportError:
     pywin32_installed = False
 
-from utils.deps import (
+from ..utils.deps import (
     APP_VERSION, CABLE_INPUT_HINT,
     ENGINE_EDGE, ENGINE_PYTTX3, DEFAULT_EDGE_VOICE,
     DependencyManager, IS_WINDOWS
 )
-from app.audio_engine import AudioEngine
-from ui.popups import SettingsWindow, QuickPhrasesWindow # This should be relative to src
-from ui.main_window import build_main_window_ui # This should be relative to src
-from app.config_manager import ConfigManager
-from app.updater_manager import UpdateManager
+from .audio_engine import AudioEngine
+from ..ui.popups import SettingsWindow, QuickPhrasesWindow
+from ..ui.main_window import build_main_window_ui
+from .config_manager import ConfigManager
+from .updater_manager import UpdateManager
 
 class LocalTTSPlayer:
-    def __init__(self):
+    def __init__(self, startupinfo=None):
         # 狀態/設定 (提前初始化日誌佇列，以防 ConfigManager 初始化時就需要記錄)
         self._early_log_queue = []
         self.config = ConfigManager(self.log_message)
         self.audio_status_queue = queue.Queue()
-
+        self.startupinfo = startupinfo # 儲存 startupinfo 物件
+        
         # 狀態/設定
         # 音訊核心 (必須在 _build_ui 之前建立，以便 UI 取得初始值)
         self.audio = AudioEngine(self.log_message, self.audio_status_queue)

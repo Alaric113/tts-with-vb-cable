@@ -215,15 +215,26 @@ class UpdateWizard:
                 wizard_temp_dir = os.path.dirname(sys.executable)
                 if "jumouth_updater_" in os.path.basename(wizard_temp_dir):
                     self._log("準備自我清理...", "DEBUG")
-                    # 建立一個 .bat 腳本來刪除自己所在的臨時資料夾
+                    # 建立一個 .bat 腳本來刪除自己所在的臨時資料夾。
+                    # 使用 ping 提供可靠的延遲，並在最後自我刪除。
                     cleanup_script = f"""
 @echo off
-timeout /t 1 /nobreak > NUL
+chcp 65001 > NUL
+echo 正在等待更新精靈完全關閉...
+REM 使用 ping 作為可靠的延遲，等待檔案鎖被釋放
+ping 127.0.0.1 -n 3 > NUL
+
+echo 正在清理臨時更新檔案...
 rmdir /s /q "{wizard_temp_dir}"
+
+echo 清理完成，正在刪除此腳本...
+(goto) 2>nul & del "%~f0"
 """
-                    cleanup_bat_path = os.path.join(os.path.dirname(wizard_temp_dir), "cleanup.bat")
+                    # 使用時間戳確保批次檔名稱唯一
+                    cleanup_bat_path = os.path.join(os.path.dirname(wizard_temp_dir), f"cleanup_{int(time.time())}.bat")
                     with open(cleanup_bat_path, "w", encoding="utf-8") as f: f.write(cleanup_script)
-                    subprocess.Popen(f'cmd.exe /c start /b "" "{cleanup_bat_path}" > NUL 2>&1', shell=True, creationflags=subprocess.DETACHED_PROCESS)
+                    # 直接執行 bat，並使用 CREATE_NO_WINDOW 隱藏視窗
+                    subprocess.Popen(f'"{cleanup_bat_path}"', shell=True, creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW)
             except Exception as e:
                 self._log(f"自我清理失敗: {e!r}", "WARN")
             self.update_finished = True

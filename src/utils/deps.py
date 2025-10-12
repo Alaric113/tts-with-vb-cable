@@ -22,29 +22,24 @@ import urllib.request
 IS_WINDOWS = sys.platform.startswith("win")
 
 # ================= 基本路徑與常數 =================
-def get_app_data_path():
+def get_base_path():
     """
-    獲取應用程式的資料儲存路徑。
-    - 打包後: C:\\Users\\<user>\\AppData\\Local\\JuMouth
-    - 開發時: 腳本所在目錄
+    獲取應用程式的基礎路徑。
+    - 打包後: 指向 exe 所在的目錄。
+    - 開發時: 指向專案根目錄 (包含 src, main.py 的地方)。
     """
-    if not getattr(sys, 'frozen', False):
-        # 開發模式
-        return os.path.dirname(os.path.abspath(__file__))
-    
-    # 打包後模式
-    app_data_path = os.path.join(os.environ['LOCALAPPDATA'], 'JuMouth')
-    os.makedirs(app_data_path, exist_ok=True)
-    return app_data_path
+    if getattr(sys, 'frozen', False):
+        # 打包後，基礎路徑是 exe 所在的目錄
+        return os.path.dirname(sys.executable)
+    # 開發模式，基礎路徑是 main.py 所在的專案根目錄
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-# SCRIPT_DIR 現在永遠指向使用者可寫的資料目錄
-SCRIPT_DIR = get_app_data_path()
-# EXE_DIR 指向程式執行檔所在的目錄
-EXE_DIR = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
+# BASE_DIR 現在是所有路徑的統一基準
+BASE_DIR = get_base_path()
+CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 
 # --- 應用程式版本與更新資訊 ---
-APP_VERSION = "1.0.0"  # 您可以根據您的版本進度修改此處
+APP_VERSION = "1.1.0"  # 您可以根據您的版本進度修改此處
 GITHUB_REPO = "Alaric113/tts-with-vb-cable" # !! 請務必將 YOUR_USERNAME 替換成您的 GitHub 使用者名稱 !!
 
 CABLE_OUTPUT_HINT = "CABLE Input"
@@ -56,7 +51,7 @@ DEFAULT_EDGE_VOICE = "zh-CN-XiaoxiaoNeural"
 ENGINE_EDGE   = "edge-tts"
 ENGINE_PYTTX3 = "pyttsx3"
 
-FFMPEG_DIR = os.path.join(SCRIPT_DIR, "ffmpeg")
+FFMPEG_DIR = os.path.join(BASE_DIR, "ffmpeg")
 FFMPEG_BIN_DIR = os.path.join(FFMPEG_DIR, "bin")
 FFMPEG_EXE = os.path.join(FFMPEG_BIN_DIR, "ffmpeg.exe" if IS_WINDOWS else "ffmpeg")
 FFPROBE_EXE = os.path.join(FFMPEG_BIN_DIR, "ffprobe.exe" if IS_WINDOWS else "ffprobe")
@@ -275,8 +270,8 @@ class DependencyManager:
         for d in devices:
             name = d.get('name', '')
             if CABLE_OUTPUT_HINT.upper() in name.upper():
-                # 清理同目錄安裝包
-                vbcable_install_dir = os.path.join(EXE_DIR, "vbcable")
+                # 清理同目錄安裝包 (現在使用 BASE_DIR)
+                vbcable_install_dir = os.path.join(BASE_DIR, "vbcable")
                 if os.path.isdir(vbcable_install_dir):
                     try:
                         shutil.rmtree(vbcable_install_dir)
@@ -292,7 +287,7 @@ class DependencyManager:
         - 若無，詢問是否下載並解壓，完成後提示執行
         UI 互動交由呼叫端的 callback 處理
         """
-        setup_path = os.path.join(EXE_DIR, "vbcable", VB_CABLE_SETUP_EXE)
+        setup_path = os.path.join(BASE_DIR, "vbcable", VB_CABLE_SETUP_EXE)
         if os.path.exists(setup_path):
             on_have_setup_path(setup_path)
             return
@@ -307,7 +302,7 @@ class DependencyManager:
 
         # 下載與解壓
         try:
-            target_dir = os.path.join(EXE_DIR, "vbcable")
+            target_dir = os.path.join(BASE_DIR, "vbcable")
             ensure_dir(target_dir)
             with tempfile.TemporaryDirectory(prefix="vbcable_") as td:
                 tmp_zip = os.path.join(td, "VBCABLE_Driver_Pack.zip")
