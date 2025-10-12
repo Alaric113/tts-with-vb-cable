@@ -41,5 +41,15 @@ xcopy "dist\update_wizard" "dist\JuMouth\_internal\update_wizard" /E /I /Y
 echo [Build Script] ========== 步驟 3 完成。 ==========
 echo.
 
+echo [Build Script] ========== 步驟 4: 建立更新用的 ZIP 壓縮檔 ==========
+set ZIP_FILENAME=JuMouth_update.zip
+if exist "%ZIP_FILENAME%" (
+    del "%ZIP_FILENAME%"
+)
+echo [Build Script] 正在壓縮 'dist\JuMouth' 的內容到 %ZIP_FILENAME%...
+powershell -command "Compress-Archive -Path 'dist\JuMouth\*' -DestinationPath '%ZIP_FILENAME%'"
+echo [Build Script] ========== 步驟 4 完成。 ==========
+echo.
+
 echo [Build Script] >>> 所有打包工作已成功完成！ <<<
 echo [Build Script] 最終的應用程式位於 'dist\JuMouth' 資料夾中。
