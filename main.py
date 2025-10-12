@@ -62,6 +62,18 @@ class SingleInstance:
                 pass
 
 if __name__ == "__main__":
+    # ===================== 更新程序入口 =====================
+    # 檢查是否作為更新器啟動。
+    # 如果是，則直接執行 updater.py 的邏輯並退出，不進行 UI 或單例檢查。
+    if len(sys.argv) > 1 and sys.argv[1] == '--run-updater':
+        try:
+            from updater import main as updater_main
+            updater_main()
+        except Exception as e:
+            # 即使更新失敗，也要確保程序能退出
+            print(f"Updater execution failed: {e}")
+        sys.exit(0)
+
     if not sys.platform.startswith("win"):
         messagebox.showwarning("警告", "此應用程式主要為 Windows 設計，在您目前的作業系統上，部分功能（如 VB-CABLE 安裝）將無法使用。")
     else:

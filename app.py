@@ -41,15 +41,15 @@ except ImportError:
     pywin32_installed = False
 
 from utils_deps import (
-    SCRIPT_DIR, CONFIG_FILE,
-    CABLE_INPUT_HINT, CABLE_OUTPUT_HINT,
-    ENGINE_EDGE, ENGINE_PYTTX3, DEFAULT_EDGE_VOICE, APP_VERSION, GITHUB_REPO,
+    APP_VERSION, CABLE_INPUT_HINT,
+    ENGINE_EDGE, ENGINE_PYTTX3, DEFAULT_EDGE_VOICE,
     DependencyManager, IS_WINDOWS
 )
 from audio_engine import AudioEngine
 from ui.popups import SettingsWindow, QuickPhrasesWindow
 from ui.main_window import build_main_window_ui
 from config_manager import ConfigManager
+from updater_manager import UpdateManager
 
 class LocalTTSPlayer:
     def __init__(self):
@@ -57,6 +57,7 @@ class LocalTTSPlayer:
         self.config = ConfigManager(self.log_message)
         # 音訊核心 (必須在 _build_ui 之前建立，以便 UI 取得初始值)
         self.audio = AudioEngine(self.log_message, self._log_playback_status)
+        self.updater = UpdateManager(self) # 建立更新管理器
 
         self.is_running = False
 
@@ -95,10 +96,10 @@ class LocalTTSPlayer:
         self._update_hotkey_display(self.config.get("hotkey"))
 
         # 啟動後立即在背景檢查更新
-        self.root.after(100, lambda: self._check_for_updates(silent=True))
+        self.root.after(100, lambda: self.updater.check_for_updates(silent=True))
 
         # 依賴流程（先 Log，再詢問）
-        self.root.after(500, lambda: threading.Thread(target=self._dependency_flow_thread, daemon=True).start())
+        self.root.after(2000, lambda: threading.Thread(target=self._dependency_flow_thread, daemon=True).start())
         
         if self.config.get("auto_start_service"):
             self.log_message("偵測到自動啟動選項，將在初始化完成後啟動服務。")
@@ -173,6 +174,24 @@ class LocalTTSPlayer:
             self.log_text.configure(state="disabled")
         self.root.after(0, upd)
 
+    def show_messagebox(self, title, message, msg_type="info"):
+        """安全地從任何執行緒顯示訊息框。"""
+        if msg_type == "info":
+            return messagebox.showinfo(title, message)
+        elif msg_type == "warning":
+            return messagebox.showwarning(title, message)
+        elif msg_type == "error":
+            return messagebox.showerror(title, message)
+        elif msg_type == "yesno":
+            return messagebox.askyesno(title, message)
+
+    def set_ui_updating_state(self, is_updating):
+        """設定 UI 進入或離開更新狀態。"""
+        state = "disabled" if is_updating else "normal"
+        self.start_button.configure(state=state)
+        self.stop_button.configure(state="disabled") # 更新時停止按鈕總是禁用
+        self.hotkey_edit_button.configure(state=state)
+
     # ===================== 依賴流程 =====================
     def _dependency_flow_thread(self):
         if IS_WINDOWS and comtypes_installed:
@@ -182,9 +201,9 @@ class LocalTTSPlayer:
         dm = DependencyManager(
             log=self.log_message,
             status=self._log_status_update,
-            ask_yes_no=messagebox.askyesno,
-            show_info=messagebox.showinfo,
-            show_error=messagebox.showerror
+            ask_yes_no=lambda t, m: self.show_messagebox(t, m, "yesno"),
+            show_info=lambda t, m: self.show_messagebox(t, m, "info"),
+            show_error=lambda t, m: self.show_messagebox(t, m, "error")
         )
         if not dm.ensure_ffmpeg():
             return
@@ -635,144 +654,3 @@ class LocalTTSPlayer:
 
     def run(self):
         self.root.mainloop()
-
-    # ===================== 更新檢查 =====================
-    def _check_for_updates(self, silent=False):
-        """啟動一個背景執行緒來檢查更新。"""
-        self.log_message("開始檢查更新...")
-        threading.Thread(target=self._update_check_thread, args=(silent,), daemon=True).start()
-
-    def _update_check_thread(self, silent=False):
-        """在背景執行緒中執行的更新檢查邏輯。"""
-        if IS_WINDOWS and comtypes_installed:
-            pythoncom.CoInitializeEx(0)
-
-        try:
-            import requests
-            from packaging.version import parse as parse_version
-            import webbrowser
-        except ImportError as e:
-            self.log_message(f"缺少檢查更新所需的模組: {e}", "ERROR")
-            self.root.after(0, lambda: messagebox.showerror("錯誤", f"缺少模組: {e}。\n請安裝 'requests' 和 'packaging'。"))
-            return
-
-        if "YOUR_USERNAME" in GITHUB_REPO:
-            self.log_message("GitHub 倉庫路徑未設定，無法檢查更新。", "WARN")
-            self.root.after(0, lambda: messagebox.showwarning("提示", "開發者尚未設定更新檢查路徑。"))
-            return
-
-        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-        
-        try:
-            response = requests.get(api_url, timeout=10)
-            response.raise_for_status()
-            latest_release = response.json()
-            latest_version_str = latest_release["tag_name"].lstrip('v')
-            
-            if parse_version(latest_version_str) > parse_version(APP_VERSION):
-                self.log_message(f"發現新版本: {latest_version_str} (當前版本: {APP_VERSION})", "INFO")
-                download_url = latest_release["html_url"]
-                # 尋找名為 '橘Mouth.exe' 的 asset
-                asset = next((a for a in latest_release.get('assets', []) if a['name'] == 'JuMouth.exe'), None)
-                if asset and getattr(sys, 'frozen', False): # 只在打包後的 .exe 中啟用自動更新
-                    if messagebox.askyesno("發現新版本", f"檢測到新版本 {latest_version_str}！\n(您目前使用的是 {APP_VERSION})\n\n是否要立即下載並安裝更新？"):
-                        self._start_update_process(asset['browser_download_url'])
-                elif not silent: # 如果是手動檢查，但找不到 .exe 或不在打包模式，則引導至網頁
-                    if messagebox.askyesno("發現新版本", f"檢測到新版本 {latest_version_str}！\n(您目前使用的是 {APP_VERSION})\n\n是否要前往下載頁面？"):
-                        webbrowser.open_new_tab(download_url)
-            else:
-                self.log_message(f"目前已是最新版本 ({APP_VERSION})。", "INFO")
-                if not silent:
-                    self.root.after(0, lambda: messagebox.showinfo("提示", f"您目前使用的 {APP_VERSION} 已是最新版本。"))
-        except requests.exceptions.RequestException as e:
-            self.log_message(f"檢查更新失敗: {e}", "ERROR")
-            if not silent:
-                self.root.after(0, lambda: messagebox.showwarning("錯誤", f"無法連線至 GitHub 檢查更新。\n請檢查您的網路連線。\n\n錯誤: {e}"))
-
-    def _start_update_process(self, download_url):
-        """啟動背景執行緒來下載並安裝更新。"""
-        self.log_message("更新程序已啟動...")
-        self.start_button.configure(state="disabled")
-        self.stop_button.configure(state="disabled")
-        self.hotkey_edit_button.configure(state="disabled")
-        threading.Thread(target=self._update_download_thread, args=(download_url,), daemon=True).start()
-
-    def _update_download_thread(self, url):
-        """在背景執行緒中下載新版本並觸發更新腳本。"""
-        if IS_WINDOWS and comtypes_installed:
-            pythoncom.CoInitializeEx(0)
-
-        try:
-            import requests
-            import subprocess
-            
-            # SCRIPT_DIR 在打包後指向 %LOCALAPPDATA%\橘Mouth
-            # sys.executable 指向當前運行的 .exe 檔案
-            exe_path = sys.executable
-            exe_dir = os.path.dirname(exe_path)
-            new_exe_path = os.path.join(exe_dir, "JuMouth_new.exe")
-            updater_bat_path = os.path.join(exe_dir, "updater.bat")
-
-            self.log_message(f"開始下載更新檔案從: {url}")
-            self._toggle_download_ui(True)
-
-            with requests.get(url, stream=True, timeout=30) as r:
-                r.raise_for_status()
-                total_size = int(r.headers.get('content-length', 0))
-                downloaded_size = 0
-                with open(new_exe_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                        downloaded_size += len(chunk)
-                        progress = downloaded_size / total_size if total_size > 0 else 0
-                        self._update_download_ui(progress, f"下載中... {downloaded_size/1024/1024:.2f}MB / {total_size/1024/1024:.2f}MB")
-
-            self.log_message("下載完成，準備執行更新...")
-            self._update_download_ui(1.0, "下載完成！應用程式即將重新啟動...")
-
-            # 建立 updater.bat
-            updater_script = f"""
-@echo off
-chcp 65001 > NUL
-
-:: 清除 PyInstaller 的暫存路徑環境變數，這是解決 "Failed to load Python DLL" 的關鍵
-set _MEIPASS2=
-
-set EXE_NAME={os.path.basename(exe_path)}
-echo.
-echo [橘Mouth 更新程式] 正在等待主程式關閉...
-
-:wait_loop
-tasklist /FI "IMAGENAME eq %EXE_NAME%" | find /I "%EXE_NAME%" > NUL
-if not errorlevel 1 (
-    timeout /t 1 /nobreak > NUL
-    goto wait_loop
-)
-
-echo [橘Mouth 更新程式] 正在替換檔案...
-del /F /Q "{exe_path}"
-move /Y "{new_exe_path}" "{exe_path}"
-echo [橘Mouth 更新程式] 正在重新啟動...
-
-:: 使用 cmd /c start 在一個全新的、乾淨的環境中啟動程式，避免繼承舊的 _MEIPASS2 環境變數
-cmd /c start "" "{exe_path}"
-(goto) 2>NUL & del "%~f0"
-"""
-            with open(updater_bat_path, "w", encoding="utf-8") as f:
-                f.write(updater_script)
-
-            # 直接呼叫 cmd.exe 並使用 start 命令來啟動一個完全獨立的 bat 腳本，確保主程式退出後它仍能運行
-            # CREATE_NEW_CONSOLE 旗標會彈出一個短暫的黑窗，這是可靠性的必要代價
-            command = f'cmd.exe /c start "JuMouth Updater" "{updater_bat_path}"'
-            subprocess.Popen(command, creationflags=subprocess.CREATE_NEW_CONSOLE, close_fds=True)
-
-            # 關閉主程式
-            self.root.after(1000, self.on_closing)
-
-        except Exception as e:
-            self.log_message(f"更新失敗: {e}", "ERROR")
-            self.root.after(0, lambda: messagebox.showerror("更新失敗", f"下載或安裝更新時發生錯誤:\n{e}"))
-            self._toggle_download_ui(False)
-            # 恢復按鈕狀態
-            self.start_button.configure(state="normal")
-            self.hotkey_edit_button.configure(state="normal")

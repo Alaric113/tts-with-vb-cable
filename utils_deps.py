@@ -28,7 +28,7 @@ def get_base_path():
     開發時: 腳本所在目錄
     """
     if getattr(sys, 'frozen', False):
-        app_data_path = os.path.join(os.environ['LOCALAPPDATA'], '橘Mouth')
+        app_data_path = os.path.join(os.environ['LOCALAPPDATA'], 'JuMouth')
         os.makedirs(app_data_path, exist_ok=True)
         return app_data_path
     else:
@@ -38,7 +38,7 @@ SCRIPT_DIR = get_base_path()
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 
 # --- 應用程式版本與更新資訊 ---
-APP_VERSION = "1.0"  # 您可以根據您的版本進度修改此處
+APP_VERSION = "0.9"  # 您可以根據您的版本進度修改此處
 GITHUB_REPO = "Alaric113/tts-with-vb-cable" # !! 請務必將 YOUR_USERNAME 替換成您的 GitHub 使用者名稱 !!
 
 CABLE_OUTPUT_HINT = "CABLE Input"

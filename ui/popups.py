@@ -95,7 +95,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.listen_volume_label.grid(row=2, column=2, padx=10, pady=5, sticky="w")
         
         # --- 檢查更新按鈕 ---
-        update_button = ctk.CTkButton(main_frame, text="檢查更新", command=lambda: self.app._check_for_updates(silent=False))
+        update_button = ctk.CTkButton(main_frame, text="檢查更新", command=lambda: self.app.updater.check_for_updates(silent=False))
         update_button.grid(row=5, column=0, pady=(20, 10), sticky="ew")
 
         # --- 版本號標籤 ---
