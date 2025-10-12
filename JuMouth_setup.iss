@@ -6,20 +6,20 @@
 ; 你可以在 Inno Setup 編譯器的 "Tools" -> "Generate GUID" 中生成。
 AppId={{F2A4B6E0-1C3D-4B7A-9F2E-5A8D6F0C1B9A}}
 AppName=JuMouth TTS
-AppVersion=1.2.0
+AppVersion=1.0.0
 AppPublisher=Alaric113
 AppPublisherURL=https://github.com/Alaric113/tts-with-vb-cable
 AppSupportURL=https://github.com/Alaric113/tts-with-vb-cable/issues
 AppUpdatesURL=https://github.com/Alaric113/tts-with-vb-cable/releases
 
-; 預設安裝目錄。{localappdata} 會自動解析為 C:\Users\<使用者名稱>\AppData\Local
-DefaultDirName={localappdata}\JuMouth
+; 預設安裝目錄。{autopf} 會自動解析為 "C:\Program Files (x86)" 或 "C:\Program Files"
+DefaultDirName={autopf}\JuMouth
 DisableDirPage=no
 DefaultGroupName=JuMouth TTS
 
 ; 輸出設定
 OutputDir=.\install
-OutputBaseFilename=JuMouth_v1.2.0_setup
+OutputBaseFilename=JuMouth_v1.0.0_setup
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern

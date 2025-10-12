@@ -111,33 +111,6 @@ class LocalTTSPlayer:
         build_main_window_ui(self)
 
     # ===================== Log 與進度 =====================
-    def _toggle_download_ui(self, show: bool):
-        def upd():
-            try:
-                if show:
-                    self.download_bar.grid()
-                    self.download_label.configure(text="[----------] 0.0% | 下載準備中…")
-                    self.download_bar.master.tkraise()
-                else:
-                    self.download_bar.master.grid_remove()
-            except Exception:
-                pass
-        self.root.after(0, upd)
-
-    def _update_download_ui(self, progress: float, text: str):
-        def upd():
-            try:
-                p = max(0.0, min(1.0, progress))
-                self.download_bar.set(p)
-                bar_len = 20
-                filled_len = int(bar_len * p)
-                bar = '█' * filled_len + '-' * (bar_len - filled_len)
-                progress_text = f"[{bar}] {p*100:5.1f}% | {text}"
-                self.download_label.configure(text=progress_text)
-            except Exception:
-                pass
-        self.root.after(0, upd)
-
     def log_message(self, msg, level="INFO"):
         def upd():
             from datetime import datetime

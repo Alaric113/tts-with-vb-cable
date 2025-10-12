@@ -63,7 +63,7 @@ class UpdateManager:
                     # 變更邏輯：優先檢查 .zip 進行原地熱更新
                     if zip_asset and getattr(sys, 'frozen', False):
                         if self.app.show_messagebox("發現新版本", f"檢測到新版本 {latest_version_str}！\n(您目前使用的是 {APP_VERSION})\n\n是否要立即下載並自動安裝更新？\n(此過程將會覆蓋當前程式檔案)", "yesno"):
-                            self._start_update_process(zip_asset['browser_download_url'])
+                            self._launch_update_wizard(zip_asset['browser_download_url'])
                     # 如果沒有 .zip 或不在打包模式，再檢查 .exe 安裝包
                     elif exe_asset:
                         if self.app.show_messagebox("發現新版本", f"檢測到新版本 {latest_version_str}！\n(您目前使用的是 {APP_VERSION})\n\n建議您下載新的安裝程式來進行更新。\n是否要前往下載頁面？", "yesno"):
@@ -83,76 +83,52 @@ class UpdateManager:
             if not silent:
                 self.app.root.after(0, lambda: self.app.show_messagebox("錯誤", f"無法連線至 GitHub 檢查更新。\n請檢查您的網路連線。\n\n錯誤: {e}", "warning"))
 
-    def _start_update_process(self, download_url):
-        """啟動背景執行緒來下載並安裝更新。"""
-        self.app.log_message("更新程序已啟動...")
-        self.app.set_ui_updating_state(True)
-        threading.Thread(target=self._update_download_thread, args=(download_url,), daemon=True).start()
-
-    def _update_download_thread(self, url):
-        """在背景執行緒中下載新版本並觸發更新腳本。"""
-        if IS_WINDOWS and comtypes_installed:
-            pythoncom.CoInitializeEx(0)
-
+    def _launch_update_wizard(self, download_url):
+        """啟動獨立的 GUI 更新精靈，並將所有後續工作交給它。"""
         try:
             import subprocess
-            
+            import tempfile
+            import shutil
+
             exe_path = sys.executable
             app_dir = os.path.dirname(exe_path)
-            update_zip_path = os.path.join(app_dir, "update.zip")
-            updater_bat_path = os.path.join(app_dir, "updater.bat")
 
-            self.app.log_message(f"開始下載更新檔案從: {url}")
-            self.app.root.after(0, lambda: self.app._toggle_download_ui(True))
+            # 啟動獨立的更新精靈 GUI 程式
+            # 根據 .spec 檔案的設定，更新精靈位於 _internal/update_wizard/
+            updater_source_dir = os.path.join(app_dir, "_internal", "update_wizard")
+            if not os.path.isdir(updater_source_dir):
+                self.app.log_message("錯誤: 找不到更新精靈 'update_wizard.exe'。", "ERROR")
+                self.app.show_messagebox("錯誤", "找不到更新精靈 'update_wizard.exe'，無法執行更新。", "error")
+                return
 
-            with requests.get(url, stream=True, timeout=30) as r:
-                r.raise_for_status()
-                total_size = int(r.headers.get('content-length', 0))
-                downloaded_size = 0
-                with open(update_zip_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                        downloaded_size += len(chunk)
-                        progress = downloaded_size / total_size if total_size > 0 else 0
-                        self.app.root.after(0, lambda p=progress, d=downloaded_size, t=total_size: self.app._update_download_ui(p, f"下載中... {d/1024/1024:.2f}MB / {t/1024/1024:.2f}MB"))
+            # --- 核心變更：將更新精靈複製到臨時目錄後再執行 ---
+            # 1. 建立一個臨時資料夾
+            temp_dir = tempfile.mkdtemp(prefix="jumouth_updater_")
+            self.app.log_message(f"建立臨時更新目錄: {temp_dir}", "DEBUG")
 
-            self.app.log_message("下載完成，準備執行更新...")
-            self.app.root.after(0, lambda: self.app._update_download_ui(1.0, "下載完成！應用程式即將重新啟動..."))
+            # 2. 將整個更新精靈資料夾複製到臨時位置
+            shutil.copytree(updater_source_dir, temp_dir, dirs_exist_ok=True)
+            self.app.log_message("已將更新精靈複製到臨時目錄。", "DEBUG")
 
-            updater_script = f"""
-@echo off
-chcp 65001 > NUL
-echo [橘Mouth 更新程式] 正在等待主程式關閉...
-set EXE_NAME={os.path.basename(exe_path)}
-:wait_loop
-tasklist /FI "IMAGENAME eq %EXE_NAME%" | find /I "%EXE_NAME%" > NUL
-if not errorlevel 1 (
-    timeout /t 1 /nobreak > NUL
-    goto wait_loop
-)
-echo [橘Mouth 更新程式] 正在解壓縮並覆蓋檔案...
-powershell -command "Expand-Archive -Path '{update_zip_path}' -DestinationPath '{app_dir}' -Force"
-echo [橘Mouth 更新程式] 清理暫存檔案...
-del "{update_zip_path}"
-echo [橘Mouth 更新程式] 正在重新啟動...
-start "" "{exe_path}"
-(goto) 2>NUL & del "%~f0"
-"""
-            with open(updater_bat_path, "w", encoding="utf-8-sig") as f:
-                f.write(updater_script)
-
-            # 使用 shell=True 來執行 cmd.exe 的內建 start 命令，這是最可靠的方式
-            # 將命令組合成一個字串，並確保路徑被正確引用
-            command_str = f'start "JuMouth Updater" "{updater_bat_path}"'
-            flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_CONSOLE
+            # 3. 從臨時目錄啟動更新精靈
+            self.app.log_message("正在從臨時目錄啟動更新精靈...", "INFO")
+            temp_updater_exe_path = os.path.join(temp_dir, "update_wizard.exe")
             
-            subprocess.Popen(command_str, shell=True, creationflags=flags)
+            pid = os.getpid()
+            command = [
+                temp_updater_exe_path, # 使用臨時目錄中的精靈
+                str(pid),
+                download_url, # 將下載 URL 作為參數傳遞
+                app_dir,
+                exe_path
+            ]
 
+            # 使用 DETACHED_PROCESS 確保更新精靈與主程式完全脫鉤
+            subprocess.Popen(command, creationflags=subprocess.DETACHED_PROCESS, close_fds=True)
+            
             self.app.root.after(1000, self.app.on_closing)
 
         except Exception as e:
             error_msg = f"啟動更新程序時發生錯誤: {e!r}"
             self.app.log_message(error_msg, "ERROR")
-            self.app.root.after(0, lambda: self.app.show_messagebox("更新失敗", f"下載或安裝更新時發生錯誤:\n{e}", "error"))
-            self.app.root.after(0, lambda: self.app._toggle_download_ui(False))
-            self.app.root.after(0, lambda: self.app.set_ui_updating_state(False))
+            self.app.show_messagebox("更新失敗", f"啟動更新精靈時發生錯誤:\n{e}", "error")

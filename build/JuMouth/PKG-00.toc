@@ -52,7 +52,7 @@
    'C:\\Users\\User\\Documents\\GitHub\\tts-with-vb-cable\\main.py',
    'PYSOURCE')],
  'python311.dll',
- True,
+ False,
  False,
  False,
  [],

@@ -22,23 +22,29 @@ import urllib.request
 IS_WINDOWS = sys.platform.startswith("win")
 
 # ================= 基本路徑與常數 =================
-def get_base_path():
+def get_app_data_path():
     """
-    打包後: C:\\Users\\<user>\\AppData\\Local\\橘Mouth
-    開發時: 腳本所在目錄
+    獲取應用程式的資料儲存路徑。
+    - 打包後: C:\\Users\\<user>\\AppData\\Local\\JuMouth
+    - 開發時: 腳本所在目錄
     """
-    if getattr(sys, 'frozen', False):
-        app_data_path = os.path.join(os.environ['LOCALAPPDATA'], 'JuMouth')
-        os.makedirs(app_data_path, exist_ok=True)
-        return app_data_path
-    else:
+    if not getattr(sys, 'frozen', False):
+        # 開發模式
         return os.path.dirname(os.path.abspath(__file__))
+    
+    # 打包後模式
+    app_data_path = os.path.join(os.environ['LOCALAPPDATA'], 'JuMouth')
+    os.makedirs(app_data_path, exist_ok=True)
+    return app_data_path
 
-SCRIPT_DIR = get_base_path()
+# SCRIPT_DIR 現在永遠指向使用者可寫的資料目錄
+SCRIPT_DIR = get_app_data_path()
+# EXE_DIR 指向程式執行檔所在的目錄
+EXE_DIR = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
 
 # --- 應用程式版本與更新資訊 ---
-APP_VERSION = "0.9"  # 您可以根據您的版本進度修改此處
+APP_VERSION = "1.0.0"  # 您可以根據您的版本進度修改此處
 GITHUB_REPO = "Alaric113/tts-with-vb-cable" # !! 請務必將 YOUR_USERNAME 替換成您的 GitHub 使用者名稱 !!
 
 CABLE_OUTPUT_HINT = "CABLE Input"
@@ -50,7 +56,6 @@ DEFAULT_EDGE_VOICE = "zh-CN-XiaoxiaoNeural"
 ENGINE_EDGE   = "edge-tts"
 ENGINE_PYTTX3 = "pyttsx3"
 
-EXE_DIR = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
 FFMPEG_DIR = os.path.join(SCRIPT_DIR, "ffmpeg")
 FFMPEG_BIN_DIR = os.path.join(FFMPEG_DIR, "bin")
 FFMPEG_EXE = os.path.join(FFMPEG_BIN_DIR, "ffmpeg.exe" if IS_WINDOWS else "ffmpeg")

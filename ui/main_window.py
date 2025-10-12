@@ -114,20 +114,9 @@ def build_main_window_ui(app):
     app.hotkey_info_label = ctk.CTkLabel(info, text="點擊 '編輯' 開始設定快捷鍵。", font=ctk.CTkFont(size=11), text_color="gray")
     app.hotkey_info_label.pack(pady=0, fill="x")
 
-    # --- 下載與日誌區塊 ---
-    dl_frame = ctk.CTkFrame(app.root, fg_color="transparent")
-    dl_frame.grid(row=6, column=0, sticky="sew", padx=PAD_X, pady=(0, PAD_Y))
-    app.download_bar = ctk.CTkProgressBar(dl_frame, corner_radius=CORNER_RADIUS, progress_color=app.BTN_COLOR)
-    app.download_bar.set(0.0)
-    app.download_bar.pack(fill="x", expand=False, pady=(8, 2))
-    app.download_label = ctk.CTkLabel(dl_frame, text="", anchor="w", font=ctk.CTkFont(family="Consolas"))
-    app.download_label.pack(fill="x", expand=False)
-    app._toggle_download_ui(False)
-
     log = ctk.CTkFrame(app.root, corner_radius=CORNER_RADIUS, fg_color=FG_COLOR, border_color=app.BORDER_COLOR, border_width=1)
     log.grid(row=6, column=0, sticky="nsew", padx=PAD_X, pady=(PAD_Y, 20))
     app.log_text = ctk.CTkTextbox(log, font=("Consolas", 12), corner_radius=CORNER_RADIUS, fg_color=FG_COLOR, border_color=app.BORDER_COLOR, border_width=0)
     app.log_text.pack(fill="both", expand=True, padx=1, pady=1)
     app.log_text.configure(state="disabled")
-    dl_frame.tkraise()
     app.root.protocol("WM_DELETE_WINDOW", app.on_closing)
