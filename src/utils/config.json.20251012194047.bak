@@ -1,0 +1,11 @@
+{
+    "engine": "edge-tts",
+    "voice": "zh-CN-XiaoxiaoNeural",
+    "rate": 175,
+    "volume": 1.0,
+    "hotkey": "<shift>+z",
+    "quick_phrases": [
+        {
+            "text": "",
+            "hotkey": "",
+            "_entry_ref": 

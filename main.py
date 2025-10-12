@@ -10,15 +10,19 @@ from tkinter import messagebox
 import traceback
 import ctypes
 
-from app import LocalTTSPlayer
-from utils_deps import IS_WINDOWS
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
 
-# Windows 可選依賴提示
+# Core application import should not be in a try...except for optional dependencies
+from app.app import LocalTTSPlayer
+from utils.deps import IS_WINDOWS
+
 try:
     import comtypes # noqa: F401
     comtypes_installed = True
 except Exception:
     comtypes_installed = False
+
 try:
     import win32gui
     import win32event
@@ -62,17 +66,6 @@ class SingleInstance:
                 pass
 
 if __name__ == "__main__":
-    # ===================== 更新程序入口 =====================
-    # 檢查是否作為更新器啟動。
-    # 如果是，則直接執行 updater.py 的邏輯並退出，不進行 UI 或單例檢查。
-    if len(sys.argv) > 1 and sys.argv[1] == '--run-updater':
-        try:
-            from updater import main as updater_main
-            updater_main()
-        except Exception as e:
-            # 即使更新失敗，也要確保程序能退出
-            print(f"Updater execution failed: {e}")
-        sys.exit(0)
 
     if not sys.platform.startswith("win"):
         messagebox.showwarning("警告", "此應用程式主要為 Windows 設計，在您目前的作業系統上，部分功能（如 VB-CABLE 安裝）將無法使用。")
@@ -110,8 +103,8 @@ if __name__ == "__main__":
     except Exception as e:
         error_details = traceback.format_exc() # 獲取完整的 traceback
         messagebox.showerror("嚴重錯誤", f"應用程式遇到無法處理的錯誤並即將關閉。\n\n錯誤詳情：\n{error_details}")
-        import os
-        from utils_deps import SCRIPT_DIR
+        # 即使 utils 匯入失敗，也要嘗試記錄
+        SCRIPT_DIR = os.path.join(os.environ.get('LOCALAPPDATA', '.'), 'JuMouth')
         log_path = os.path.join(SCRIPT_DIR, "error.log")
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"--- {__import__('datetime').datetime.now()} ---\n{error_details}\n\n")
