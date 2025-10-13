@@ -39,7 +39,7 @@ BASE_DIR = get_base_path()
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 
 # --- 應用程式版本與更新資訊 ---
-APP_VERSION = "1.1.0"  # 您可以根據您的版本進度修改此處
+APP_VERSION = "1.1.2"  # 您可以根據您的版本進度修改此處
 GITHUB_REPO = "Alaric113/tts-with-vb-cable" # !! 請務必將 YOUR_USERNAME 替換成您的 GitHub 使用者名稱 !!
 
 CABLE_OUTPUT_HINT = "CABLE Input"
@@ -94,9 +94,17 @@ def has_system_ffmpeg() -> bool:
 def has_bundled_ffmpeg() -> bool:
     return os.path.isfile(FFMPEG_EXE) and os.path.isfile(FFPROBE_EXE)
 
-def ffmpeg_version_ok(path_ffmpeg: str) -> bool:
+def ffmpeg_version_ok(path_ffmpeg: str, startupinfo=None) -> bool:
     try:
-        res = subprocess.run([path_ffmpeg, "-version"], capture_output=True, text=True, timeout=5)
+        # --- 修正: 傳遞 startupinfo 以隱藏視窗 ---
+        creationflags = 0
+        if IS_WINDOWS:
+            creationflags = subprocess.CREATE_NO_WINDOW
+        res = subprocess.run(
+            [path_ffmpeg, "-version"], capture_output=True, text=True, timeout=5,
+            startupinfo=startupinfo,
+            creationflags=creationflags
+        )
         return res.returncode == 0 and ("ffmpeg" in (res.stdout.lower() + res.stderr.lower()))
     except Exception:
         return False
@@ -185,7 +193,7 @@ def extract_ffmpeg_zip(zip_path: str, target_bin_dir: str, progress_cb=None, sta
 
 # ================= 依賴處理（以回呼解耦 UI） =================
 class DependencyManager:
-    def __init__(self, log, status, ask_yes_no, show_info, show_error):
+    def __init__(self, log, status, ask_yes_no, show_info, show_error, startupinfo=None):
         """
         log(text, level='INFO')
         status(icon_text, message, level='INFO')
@@ -198,6 +206,7 @@ class DependencyManager:
         self.ask_yes_no = ask_yes_no
         self.show_info = show_info
         self.show_error = show_error
+        self.startupinfo = startupinfo
 
     # ---- ffmpeg ----
     def ensure_ffmpeg(self) -> bool:
@@ -210,7 +219,7 @@ class DependencyManager:
         if os.path.isdir(FFMPEG_BIN_DIR):
             prepend_env_path(FFMPEG_BIN_DIR)
 
-        if has_bundled_ffmpeg() and ffmpeg_version_ok(FFMPEG_EXE):
+        if has_bundled_ffmpeg() and ffmpeg_version_ok(FFMPEG_EXE, self.startupinfo):
             self.status("[✔]", "已找到內嵌 ffmpeg/ffprobe，將直接使用。")
             prepend_env_path(FFMPEG_BIN_DIR)
             return True
@@ -240,7 +249,7 @@ class DependencyManager:
                             progress_cb=lambda p, t: self.status("[ unpacking ]", t, "INFO"),
                             status_cb=lambda t: self.log(t)
                         )
-                        if has_bundled_ffmpeg() and ffmpeg_version_ok(FFMPEG_EXE):
+                        if has_bundled_ffmpeg() and ffmpeg_version_ok(FFMPEG_EXE, self.startupinfo):
                             ok = True
                             break
                     except Exception as e:

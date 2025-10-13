@@ -19,6 +19,7 @@ from pydub import AudioSegment
 import edge_tts
 import pyttsx3
 from datetime import datetime
+import subprocess
 import queue
 
 from ..utils.deps import (
@@ -40,6 +41,7 @@ class AudioEngine:
 
         self.tts_rate = 175
         self.tts_volume = 1.0
+        self.tts_pitch = 0
 
         self.enable_listen_to_self = False
         self.listen_device_name = "Default"
@@ -75,6 +77,15 @@ class AudioEngine:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self.log("音訊工作執行緒已啟動。", "DEBUG")
+
+        # --- 修正: 建立 startupinfo 以隱藏 pydub 可能呼叫的 ffmpeg 主控台視窗 ---
+        startupinfo = None
+        if os.name == 'nt':
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+        # --------------------------------------------------------------------
+
         while True:
             try:
                 text = self.play_queue.get()
@@ -82,7 +93,7 @@ class AudioEngine:
                     self.log("音訊工作執行緒收到停止信號。", "DEBUG")
                     break
                 # Pass the running loop to the processing function
-                self._process_and_play_text(text, loop)
+                self._process_and_play_text(text, loop, startupinfo)
             except Exception as e:
                 self.log(f"音訊工作執行緒發生錯誤: {e}", "ERROR")
         self.log("音訊工作執行緒已結束。", "DEBUG")
@@ -169,7 +180,8 @@ class AudioEngine:
     async def _synth_edge_to_file(self, text, path):
         rate_param = f"{int(round((self.tts_rate - 175) * (40 / 75))):+d}%"
         volume_param = f"{int((self.tts_volume - 1.0) * 100):+d}%"
-        comm = edge_tts.Communicate(text, self.edge_voice, rate=rate_param, volume=volume_param)
+        pitch_param = f"{int(self.tts_pitch):+d}Hz"
+        comm = edge_tts.Communicate(text, self.edge_voice, rate=rate_param, volume=volume_param, pitch=pitch_param)
         await comm.save(path)
 
     def _synth_pyttsx3_to_file(self, text, path):
@@ -189,7 +201,7 @@ class AudioEngine:
         i = 0
         while not stop_event.is_set():
             char = animation_chars[i % len(animation_chars)]
-            self.status_queue.put(("[PLAY]", f"[{char}]", f"正在處理: {text[:20]}..."))
+            self.status_queue.put(("PLAY", f"[{char}]", f"正在處理: {text[:20]}..."))
             i += 1
             import time
             time.sleep(0.1)
@@ -213,18 +225,20 @@ class AudioEngine:
 
     def play_text(self, text: str):
         """Producer method: puts text into the queue to be played."""
+        self.log(f"play_text received: '{text}'", "DEBUG")
         if not isinstance(text, str) or not text.strip():
             return
         self.play_queue.put(text)
 
     def preview_text(self, text: str):
         """Producer method for previewing: puts text into the queue to be played on listen device only."""
+        self.log(f"preview_text received: '{text}'", "DEBUG")
         if not isinstance(text, str) or not text.strip():
             return
         # 使用一個特殊元組來標記這是一個預覽請求
         self.play_queue.put((text, "preview"))
 
-    def _process_and_play_text(self, text: str, loop: asyncio.AbstractEventLoop):
+    def _process_and_play_text(self, text: str, loop: asyncio.AbstractEventLoop, startupinfo=None):
         """
         The actual implementation of text synthesis and playback.
         This runs in the audio worker thread.
@@ -252,6 +266,7 @@ class AudioEngine:
             else:
                 self._synth_pyttsx3_to_file(text, synth_path)
 
+            # --- 清理: 移除本地猴子補丁，現在由全域的 runtime_hook 處理 ---
             audio = AudioSegment.from_file(synth_path)
 
             main_device_id = None
@@ -300,7 +315,7 @@ class AudioEngine:
                 try:
                     sd.play(samples, samplerate=target_sr, device=main_device_id)
                     sd.wait()
-                    self.status_queue.put(("[PLAY]", "[✔]", f"播放完畢: {text[:20]}..."))
+                    self.status_queue.put(("PLAY", "[✔]", f"播放完畢: {text[:20]}..."))
                 except Exception as e:
                     self.log(f"播放到主設備失敗: {e}", "ERROR")
                 finally:
@@ -318,7 +333,7 @@ class AudioEngine:
                 try:
                     sd.play(samples, samplerate=target_sr, device=listen_device_id)
                     sd.wait()
-                    self.status_queue.put(("[PLAY]", "[✔]", f"試聽完畢: {text[:20]}..."))
+                    self.status_queue.put(("PLAY", "[✔]", f"試聽完畢: {text[:20]}..."))
                 except Exception as e:
                     self.log(f"試聽失敗: {e}", "ERROR")
                 finally:
@@ -359,9 +374,9 @@ class AudioEngine:
             t1.join();  t2.join()
 
             if not playback_errors:
-                self.status_queue.put(("[PLAY]", "[✔]", f"播放完畢: {text[:20]}..."))
+                self.status_queue.put(("PLAY", "[✔]", f"播放完畢: {text[:20]}..."))
             else:
-                self.status_queue.put(("[PLAY]", "[❌]", f"播放時發生錯誤: {text[:20]}..."))
+                self.status_queue.put(("PLAY", "[❌]", f"播放時發生錯誤: {text[:20]}..."))
 
         except Exception as e:
             self.log(f"播放錯誤: {e}", "ERROR")

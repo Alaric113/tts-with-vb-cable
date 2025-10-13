@@ -50,6 +50,7 @@ from .audio_engine import AudioEngine
 from ..ui.popups import SettingsWindow, QuickPhrasesWindow
 from ..ui.main_window import build_main_window_ui
 from .config_manager import ConfigManager
+from ..ui.animation import AnimationManager
 from .updater_manager import UpdateManager
 
 class LocalTTSPlayer:
@@ -90,6 +91,9 @@ class LocalTTSPlayer:
         # 先顯示主視窗
         ctk.set_appearance_mode("System")
         self._build_ui()
+        
+        # --- 增強: 初始化動畫管理器 ---
+        self.animator = AnimationManager(self.root)
 
         self.audio.start() # UI 建立完成後，再啟動音訊背景執行緒
         # 載入設定
@@ -97,6 +101,7 @@ class LocalTTSPlayer:
         self.audio.edge_voice = self.config.get("voice")
         self.audio.tts_rate   = self.config.get("rate")
         self.audio.tts_volume = self.config.get("volume")
+        self.audio.tts_pitch  = self.config.get("pitch", 0)
         self.audio.set_listen_config(self.config.get("enable_listen_to_self"), self.config.get("listen_device_name"), self.config.get("listen_volume"))
 
         self._update_hotkey_display(self.config.get("hotkey"))
@@ -110,8 +115,15 @@ class LocalTTSPlayer:
         # 依賴流程（先 Log，再詢問）
         self.root.after(2000, lambda: threading.Thread(target=self._dependency_flow_thread, daemon=True).start())
         
+        # 在 UI 完全建立後，根據設定檔設定開關狀態
+        if self.enable_quick_phrases:
+            self.quick_phrase_switch.select()
+
         if self.config.get("auto_start_service"):
             self.log_message("偵測到自動啟動選項，將在初始化完成後啟動服務。")
+
+        # 根據設定初始化日誌區域可見性
+        self.root.after(10, lambda: self.toggle_log_area(initial_load=True))
     # ===================== UI 建構 =====================
     def _build_ui(self):
         """
@@ -169,9 +181,11 @@ class LocalTTSPlayer:
         dm = DependencyManager(
             log=lambda msg, level="INFO": self.log_message(msg, level),
             status=lambda icon, msg, level="INFO": self.log_message(f"{icon} {msg}", level, mode="replace_last"),
-            ask_yes_no=lambda t, m: self.show_messagebox(t, m, "yesno"),
+            # 將 startupinfo 傳遞給依賴管理器
+            ask_yes_no=lambda t, m: self.show_messagebox(t, m, "yesno"), 
             show_info=lambda t, m: self.show_messagebox(t, m, "info"),
-            show_error=lambda t, m: self.show_messagebox(t, m, "error")
+            show_error=lambda t, m: self.show_messagebox(t, m, "error"),
+            startupinfo=self.startupinfo
         )
         if not dm.ensure_ffmpeg():
             return
@@ -222,6 +236,7 @@ class LocalTTSPlayer:
         self.engine_combo.set(self.audio.current_engine)
         self.speed_slider.set(self.audio.tts_rate)
         self.volume_slider.set(self.audio.tts_volume)
+        self.pitch_slider.set(self.audio.tts_pitch)
         # voices
         if self.audio.current_engine == ENGINE_EDGE:
             values = self.audio.get_voice_names()
@@ -232,12 +247,14 @@ class LocalTTSPlayer:
             self.voice_combo.configure(values=names)
             loaded_name = self.config.get("voice")
             self.voice_combo.set(loaded_name if loaded_name in names else (names[0] if names else "default"))
+        self.voice_combo.configure(state="normal") # 修正: 載入後啟用下拉選單
         # devices
         devnames = self.audio.get_output_device_names()
         self.local_device_combo.configure(values=devnames)
         if self.audio.local_output_device_name not in devnames:
             self.audio.local_output_device_name = devnames[0] if devnames else "Default"
         self.local_device_combo.set(self.audio.local_output_device_name)
+        self.local_device_combo.configure(state="normal") # 修正: 載入後啟用下拉選單
 
         # 處理早期日誌
         if self._early_log_queue:
@@ -270,9 +287,16 @@ class LocalTTSPlayer:
             self.log_message("無法啟動：未偵測到 VB-CABLE。", "ERROR")
             return
         self.is_running = True
+        
+        # --- 增強: 使用動畫進行狀態切換 ---
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
-        self.status_label.configure(text="狀態: 運行中", text_color="green")
+        
+        self.animator.animate_color(self.status_label, "text_color", start_color="#FF5252", end_color="#4CAF50")
+        self.animator.animate_color(self.start_button, "fg_color", start_color=self.BTN_COLOR, end_color="#546E7A")
+        self.animator.animate_color(self.stop_button, "fg_color", start_color="#546E7A", end_color="#D32F2F")
+        self.status_label.configure(text="● 運行中")
+        
         self._start_hotkey_listener()
         self.log_message("服務已啟動")
 
@@ -282,9 +306,15 @@ class LocalTTSPlayer:
         self.is_running = False
         if self.hotkey_listener:
             self.hotkey_listener.stop()
+            
+        # --- 增強: 使用動畫進行狀態切換 ---
         self.start_button.configure(state="normal")
         self.stop_button.configure(state="disabled")
-        self.status_label.configure(text="● 已停止", text_color=["#D32F2F", "#FF5252"])
+        
+        self.animator.animate_color(self.status_label, "text_color", start_color="#4CAF50", end_color="#FF5252")
+        self.animator.animate_color(self.start_button, "fg_color", start_color="#546E7A", end_color=self.BTN_COLOR)
+        self.animator.animate_color(self.stop_button, "fg_color", start_color="#D32F2F", end_color="#546E7A")
+        self.status_label.configure(text="● 已停止")
         self.log_message("服務已停止。" )
 
     def _start_hotkey_listener(self):
@@ -341,7 +371,7 @@ class LocalTTSPlayer:
         if self._recording_key_index is not None and self._recording_key_index != index:
             old_btn = self.hotkey_key_buttons[self._recording_key_index]
             old_btn.configure(fg_color=('#EAEAEA', '#4A4A4A'))
-        self._recording_key_index = index
+        self._recording_key_index = index # 修正: 應該是 CARD_COLOR
         btn = self.hotkey_key_buttons[index]
         btn.configure(text="...", fg_color="#FFA726")
         if self._hotkey_recording_listener:
@@ -353,7 +383,7 @@ class LocalTTSPlayer:
     def _toggle_hotkey_edit(self):
         self._is_hotkey_edit_mode = not self._is_hotkey_edit_mode
         if self._is_hotkey_edit_mode:
-            self.hotkey_edit_button.configure(text="✅ 完成", fg_color="#FFA726", hover_color="#FB8C00")
+            self.hotkey_edit_button.configure(text="✅ 完成", fg_color="#FFA726", hover_color="#FB8C00", text_color="black")
             for btn in self.hotkey_key_buttons:
                 btn.configure(state="normal")
             self.log_message("進入快捷鍵編輯模式。請點擊下方按鈕進行錄製。" )
@@ -363,11 +393,11 @@ class LocalTTSPlayer:
                 self._hotkey_recording_listener.stop()
                 self._hotkey_recording_listener = None
             if self._recording_key_index is not None:
-                btn = self.hotkey_key_buttons[self._recording_key_index]
-                btn.configure(fg_color=('#EAEAEA', '#4A4A4A'))
+                btn = self.hotkey_key_buttons[self._recording_key_index] # 修正: 應該是 CARD_COLOR
+                btn.configure(fg_color=self.hotkey_key_buttons[0].cget("fg_color")) # 恢復成預設顏色
                 self._recording_key_index = None
 
-            self.hotkey_edit_button.configure(text="✏️ 編輯", fg_color=self.BTN_COLOR, hover_color=self.BTN_HOVER_COLOR)
+            self.hotkey_edit_button.configure(text="✏️ 編輯", fg_color=self.BTN_COLOR, hover_color=self.BTN_HOVER_COLOR, text_color=ctk.ThemeManager.theme["CTkButton"]["text_color"])
             
             # 從按鈕文字構建新的快捷鍵字串
             parts = []
@@ -454,6 +484,9 @@ class LocalTTSPlayer:
             return
 
         win = ctk.CTkToplevel(self.root)
+        # --- 修正: 先將視窗隱藏，避免在設定完成前閃爍 ---
+        win.withdraw()
+
         win.overrideredirect(True)
 
         def _force_focus_on_toplevel(target_win):
@@ -516,6 +549,9 @@ class LocalTTSPlayer:
         entry = ctk.CTkEntry(win, font=("Arial", 14), height=h)
         entry.pack(fill="both", expand=True, padx=2, pady=2)
         history_index = -1
+
+        # --- 修正: 在所有設定完成後，將視窗顯示出來 ---
+        win.deiconify()
 
         def on_destroy(event=None):
             if self._input_window_lock.locked():
@@ -595,16 +631,46 @@ class LocalTTSPlayer:
 
         self.quick_phrases_window = QuickPhrasesWindow(self.root, self)
 
+    def _on_toggle_quick_phrases(self):
+        """當主視窗的快捷語音開關被切換時呼叫。"""
+        self.enable_quick_phrases = bool(self.quick_phrase_switch.get())
+        self.log_message(f"快捷語音功能已 {'啟用' if self.enable_quick_phrases else '停用'}")
+        self.config.set("enable_quick_phrases", self.enable_quick_phrases)
+        if self.is_running:
+            self._start_hotkey_listener()
+
+    def toggle_log_area(self, initial_load=False):
+        """
+        切換日誌區域的顯示/隱藏狀態。
+        :param initial_load: 如果是程式初次載入，則只根據設定更新UI，不反轉狀態。
+        """
+        is_expanded = self.config.get("show_log_area", True)
+
+        if not initial_load:
+            is_expanded = not is_expanded
+            self.config.set("show_log_area", is_expanded)
+
+        if is_expanded:
+            self.log_text.grid()
+            self.log_toggle_button.configure(text="▼")
+            self.root.geometry("700x850")
+        else:
+            self.log_text.grid_remove()
+            self.log_toggle_button.configure(text="▲")
+            self.root.geometry("700x570") # 為收合狀態設定一個合適的高度
+
     # ===================== 其它事件 =====================
     def _on_engine_change(self, val):
         self.audio.set_engine(val)
         self.log_message(f"切換引擎: {self.audio.current_engine}")
         # 更新 voices
         if self.audio.current_engine == ENGINE_EDGE:
+            self.pitch_slider.configure(state="normal")
             values = self.audio.get_voice_names()
             self.voice_combo.configure(values=values)
             self.voice_combo.set(self.audio.edge_voice if self.audio.edge_voice in values else values[0])
         else:
+            self.pitch_slider.configure(state="disabled")
             names = self.audio.get_voice_names()
             self.voice_combo.configure(values=names)
         self.config.set("engine", val)
@@ -621,10 +687,13 @@ class LocalTTSPlayer:
     def update_tts_settings(self, _=None):
         self.audio.tts_rate = int(self.speed_slider.get())
         self.audio.tts_volume = round(self.volume_slider.get(), 2)
+        self.audio.tts_pitch = int(self.pitch_slider.get())
         self.speed_value_label.configure(text=f"{self.audio.tts_rate}")
         self.volume_value_label.configure(text=f"{self.audio.tts_volume:.2f}")
-        self.config.set("rate", self.audio.tts_rate) # 自動儲存
-        self.config.set("volume", self.audio.tts_volume) # 自動儲存
+        self.pitch_value_label.configure(text=f"{self.audio.tts_pitch}")
+        self.config.set("rate", self.audio.tts_rate)
+        self.config.set("volume", self.audio.tts_volume)
+        self.config.set("pitch", self.audio.tts_pitch)
 
     def on_closing(self):
         if self.hotkey_listener:

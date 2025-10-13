@@ -78,13 +78,11 @@ def main():
 
         # --- 修正: 建立一個可重用的 startupinfo 物件來隱藏主控台視窗 ---
         # 這個物件將被傳遞給需要隱藏視窗的 subprocess.Popen 呼叫。
-        try:
-            if getattr(sys, 'frozen', False) and is_windows():
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = subprocess.SW_HIDE
-        except Exception:
-            pass
+        startupinfo = None
+        if is_windows():
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
 
     if is_windows() and not comtypes_installed:
         messagebox.showwarning("警告", "缺少 'comtypes' 模組，語音引擎 'pyttsx3' 可能無法正常運作。")

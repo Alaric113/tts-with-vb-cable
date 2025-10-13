@@ -139,13 +139,17 @@ a = Analysis(
     ['update_wizard.py'],
     pathex=[project_root],
     binaries=[],
-    datas=[],
+    datas=[
+        # 為更新精靈也打包相同的掛鉤
+        ('src/runtime_hook.py', '.')
+    ],
     hiddenimports=[
         'customtkinter',
         'pkg_resources.py2_warn'
     ],
     hookspath=[],
-    runtime_hooks=[],
+    # 讓更新精靈也使用此掛鉤
+    runtime_hooks=['src/runtime_hook.py'],
     excludes=[],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -157,13 +161,9 @@ a = Analysis(
 tcl_filters = get_tcl_tk_filters()
 a.datas = [
     (dest, src, typ) for (dest, src, typ) in a.datas
-    if not any(
-        (
-            'tcl' in dest and any(f in dest.replace('\\', '/') for f in tcl_filters)
-        ),
-        (
-            'tk' in dest and any(f in dest.replace('\\', '/') for f in tcl_filters)
-        )
+    if not (
+        ('tcl' in dest or 'tk' in dest) and
+        any(f in dest.replace('\\', '/') for f in tcl_filters)
     )
 ]
 # -----------------------------------------

@@ -1,21 +1,21 @@
 {
     "engine": "edge-tts",
-    "voice": "zh-CN-XiaorouNeural",
+    "voice": "zh-CN-XiaoxiaoNeural",
     "rate": 175,
     "volume": 1.0,
-    "hotkey": "`",
+    "hotkey": "<shift>+z",
     "quick_phrases": [
         {
-            "text": "你好",
-            "hotkey": "<f4>"
-        },
-        {
-            "text": "許志寬",
+            "text": "123",
             "hotkey": "<f2>"
         },
         {
-            "text": "有聲音嗎",
-            "hotkey": "<f3>"
+            "text": "",
+            "hotkey": ""
+        },
+        {
+            "text": "",
+            "hotkey": ""
         },
         {
             "text": "",
@@ -47,32 +47,15 @@
         }
     ],
     "quick_input_position": "bottom-right",
-    "enable_quick_phrases": false,
+    "enable_quick_phrases": true,
     "enable_listen_to_self": true,
-    "listen_device_name": "Realtek HD Audio 2nd output (Realtek(R) Audio)",
-    "listen_volume": 0.14,
+    "listen_device_name": "Default",
+    "listen_volume": 1.0,
     "auto_start_service": true,
     "text_history": [
-        "321",
-        "456",
-        "123",
-        "45",
-        "愛上了嗎",
-        "在幫我下再一下",
-        "就不用到網頁自己下載了",
-        "我新增了以後可以自動更新",
-        "有一個新版的app我剛剛放在那個網頁上了",
-        "我Push完要休息了",
-        "這個問題留給你處理",
-        "還是會有在其他城市的輸入中呼叫後無法打字的問題",
-        "畫一堆死得很快",
-        "閉嘴快點打遊戲",
-        "許志寬是放棄文法了嗎",
-        "test",
-        "感覺你這把都靠隊友",
-        "你",
-        "你好",
-        "測試"
+        "123"
     ],
-    "pitch": 34
+    "config_version": "1.0",
+    "show_log_area": false,
+    "pitch": 3
 }

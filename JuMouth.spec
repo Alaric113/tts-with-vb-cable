@@ -142,7 +142,10 @@ a = Analysis(
     pathex=[project_root, src_path],
     binaries=[],
     # 將 ui 資料夾作為資料檔案一起打包
-    datas=[],
+    datas=[
+        # 將執行階段掛鉤作為資料檔案打包
+        ('src/runtime_hook.py', '.')
+    ],
     hiddenimports=[
         'customtkinter',
         'pynput.keyboard._win32',
@@ -156,7 +159,8 @@ a = Analysis(
         'pydub'
     ],
     hookspath=[],
-    runtime_hooks=[],
+    # 在應用程式啟動時執行我們的掛鉤
+    runtime_hooks=['src/runtime_hook.py'],
     excludes=[],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -168,13 +172,9 @@ a = Analysis(
 tcl_filters = get_tcl_tk_filters()
 a.datas = [
     (dest, src, typ) for (dest, src, typ) in a.datas
-    if not any(
-        (
-            'tcl' in dest and any(f in dest.replace('\\', '/') for f in tcl_filters)
-        ),
-        (
-            'tk' in dest and any(f in dest.replace('\\', '/') for f in tcl_filters)
-        )
+    if not (
+        ('tcl' in dest or 'tk' in dest) and
+        any(f in dest.replace('\\', '/') for f in tcl_filters)
     )
 ]
 # -----------------------------------------

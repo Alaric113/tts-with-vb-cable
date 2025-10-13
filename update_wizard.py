@@ -103,14 +103,16 @@ class UpdateWizard:
                 self._set_status(status_text)
 
                 def is_pid_running_windows(pid_to_check):
-                    """使用 tasklist 命令檢查 PID 是否在運行，這比 os.kill 更可靠。"""
+                    """使用 tasklist 命令檢查 PID 是否在運行，並隱藏其視窗。"""
                     try:
-                        # /nh (no header), /fi (filter)
-                        # CREATE_NO_WINDOW 確保不會彈出命令提示字元視窗
+                        # --- 再次修正: 直接使用 CREATE_NO_WINDOW 旗標，這是最可靠的方式 ---
+                        creationflags = 0
+                        if os.name == 'nt':
+                            creationflags = subprocess.CREATE_NO_WINDOW
                         result = subprocess.run(
-                            ['tasklist', '/fi', f'pid eq {pid_to_check}', '/nh'],
+                            ['tasklist', '/fi', f'pid eq {pid_to_check}', '/nh'], 
                             capture_output=True, text=True, check=True,
-                            creationflags=subprocess.CREATE_NO_WINDOW
+                            creationflags=creationflags
                         )
                         # 如果命令成功且輸出包含 PID，則表示程序仍在運行
                         return str(pid_to_check) in result.stdout
@@ -185,8 +187,11 @@ class UpdateWizard:
                 self.progress_bar.configure(progress_color="green")
                 self._set_progress(1.0)
                 
-                # 使用 DETACHED_PROCESS 確保更新精靈關閉後，主程式能繼續運行
-                subprocess.Popen([self.exe_path], creationflags=subprocess.DETACHED_PROCESS, close_fds=True)
+                # --- 再次修正: 確保重啟時也絕不顯示視窗 ---
+                subprocess.Popen(
+                    [self.exe_path],
+                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+                    close_fds=True)
 
                 self._log("主程式已啟動，本視窗將自動關閉並進行自我清理。")
                 time.sleep(2)
@@ -221,10 +226,11 @@ class UpdateWizard:
 @echo off
 chcp 65001 > NUL
 echo 正在等待更新精靈完全關閉...
-REM 使用 ping 作為可靠的延遲，等待檔案鎖被釋放
-ping 127.0.0.1 -n 3 > NUL
+REM 使用 timeout 作為更可靠的延遲，等待檔案鎖被釋放
+timeout /t 2 /nobreak > NUL
 
 echo 正在清理臨時更新檔案...
+REM /s 刪除目錄樹，/q 安靜模式
 rmdir /s /q "{wizard_temp_dir}"
 
 echo 清理完成，正在刪除此腳本...

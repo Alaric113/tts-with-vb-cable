@@ -16,6 +16,7 @@ class ConfigManager:
     - 提供 get/set 介面來安全地存取設定。
     - set 操作會自動觸發儲存。
     """
+    CONFIG_VERSION = "1.0" # 新增設定檔版本
     DEFAULT_CONFIG = {
         "engine": ENGINE_EDGE,
         "voice": DEFAULT_EDGE_VOICE,
@@ -30,6 +31,8 @@ class ConfigManager:
         "listen_volume": 1.0,
         "auto_start_service": False,
         "text_history": [],
+        "config_version": CONFIG_VERSION, # 將版本號加入預設設定
+        "show_log_area": True,
     }
 
     def __init__(self, log_func):
@@ -52,10 +55,18 @@ class ConfigManager:
             try:
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     loaded_config = json.load(f)
-                    # 確保所有預設鍵都存在
-                    for key, value in self.DEFAULT_CONFIG.items():
-                        loaded_config.setdefault(key, value)
-                    self.config.update(loaded_config)
+
+                # 檢查版本並執行遷移 (未來可擴充)
+                if loaded_config.get("config_version") != self.CONFIG_VERSION:
+                    self.log(f"偵測到舊版設定檔 (v{loaded_config.get('config_version')})，將進行更新...", "INFO")
+                    # 在此處可以加入遷移邏輯，例如:
+                    # if loaded_config.get("config_version") == "0.9":
+                    #     loaded_config["new_setting"] = "default_value"
+                    loaded_config["config_version"] = self.CONFIG_VERSION
+
+                # 將載入的設定與預設值合併，確保所有鍵都存在
+                self.config.update(self.DEFAULT_CONFIG)
+                self.config.update(loaded_config)
             except (json.JSONDecodeError, IOError) as e:
                 self.log(f"載入設定檔失敗: {e}。將備份損壞的檔案並建立新的預設設定。", "ERROR")
                 try:

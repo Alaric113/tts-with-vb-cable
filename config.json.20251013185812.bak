@@ -1,0 +1,11 @@
+{
+    "engine": "edge-tts",
+    "voice": "zh-CN-YunhaoNeural",
+    "rate": 176,
+    "volume": 0.72,
+    "hotkey": "`",
+    "quick_phrases": [
+        {
+            "text": "你好",
+            "hotkey": "<f4>",
+            "_entry_ref": 
