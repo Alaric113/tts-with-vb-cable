@@ -15,16 +15,18 @@ import threading
 import tempfile
 import numpy as np
 import sounddevice as sd
-from pydub import AudioSegment
 import edge_tts
-import pyttsx3
 from datetime import datetime
 import subprocess
 import queue
 
 from ..utils.deps import (
-    DEFAULT_EDGE_VOICE, ENGINE_EDGE, ENGINE_PYTTX3
+    DEFAULT_EDGE_VOICE, ENGINE_EDGE, ENGINE_PYTTX3, CABLE_INPUT_HINT
 )
+
+# 延遲匯入，避免在 ffmpeg 路徑設定前就發出警告
+pyttsx3 = None
+AudioSegment = None
 
 class AudioEngine:
     def __init__(self, log, status_update_queue):
@@ -100,6 +102,12 @@ class AudioEngine:
 
     # ---------- 初始化 & 資源 ----------
     def init_pyttsx3(self):
+        global pyttsx3
+        if pyttsx3 is None:
+            try:
+                import pyttsx3
+            except ImportError:
+                self.log("缺少 'pyttsx3' 模組，相關功能將無法使用。", "ERROR")
         if not self._pyttsx3_engine:
             self._pyttsx3_engine = pyttsx3.init()
             self._pyttsx3_voices = self._pyttsx3_engine.getProperty("voices")
@@ -112,26 +120,45 @@ class AudioEngine:
             self.log(f"Edge TTS 載入失敗: {e}", "WARN")
 
     def query_devices(self):
+        """
+        查詢所有音訊設備（輸入與輸出）。
+        傳入 device=None, kind=None 以確保能獲取所有 host API 的設備列表。
+        """
         return sd.query_devices()
 
     def load_devices(self):
         try:
             devices = sd.query_devices()
+            all_device_names_upper = [d['name'].upper() for d in devices]
             output_devices = [d for d in devices if d['max_output_channels'] > 0]
+
             self._listen_devices = {d['name']: d['index'] for d in output_devices}
             self._local_output_devices = {d['name']: d['index'] for d in output_devices}
-            found_cable = False
+
+            # 步驟 4: 判斷驅動是否存在 (以虛擬麥克風為依據)
+            self.cable_is_present = any(CABLE_INPUT_HINT.upper() in name for name in all_device_names_upper)
+
+            # 步驟 5: 智慧尋找輸出設備 (虛擬喇叭)
+            best_candidate = None
+            # 5.1 優先尋找標準的 "CABLE Input"
             for d in output_devices:
                 if "CABLE Input".upper() in d['name'].upper():
-                    self.local_output_device_name = d['name']
-                    self.cable_is_present = True
-                    found_cable = True
+                    best_candidate = d['name']
                     break
-            if not found_cable:
-                self.local_output_device_name = "未找到 VB-CABLE!"
-                self.log("設備列表載入完成，但未偵測到 VB-CABLE。", "WARN")
-            else:
-                self.log(f"已綁定輸出設備：{self.local_output_device_name}")
+            
+            # 5.2 若找不到，則擴大範圍尋找任何包含 "VB-AUDIO" 的設備
+            if not best_candidate:
+                for d in output_devices:
+                    # 排除麥克風，因為有些系統會把麥克風也列為輸出
+                    if "VB-AUDIO" in d['name'].upper() and "OUTPUT" not in d['name'].upper():
+                        best_candidate = d['name']
+                        break
+            
+            # 步驟 6: 設定預設設備
+            if best_candidate:
+                self.local_output_device_name = best_candidate
+                self.log(f"已自動綁定輸出設備：{self.local_output_device_name}", "INFO")
+
         except Exception as e:
             self.log(f"取得音效卡失敗: {e}", "ERROR")
 
@@ -261,6 +288,10 @@ class AudioEngine:
         animation_thread.start()
 
         try:
+            global AudioSegment
+            if AudioSegment is None:
+                from pydub import AudioSegment
+
             if self.current_engine == ENGINE_EDGE:
                 loop.run_until_complete(self._synth_edge_to_file(text, synth_path))
             else:

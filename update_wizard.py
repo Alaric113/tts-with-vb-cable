@@ -2,8 +2,6 @@
 # 檔案: update_wizard.py
 # 功用: 一個獨立的 GUI 更新精靈，由主程式啟動。
 
-import customtkinter as ctk
-import tkinter as tk
 import sys
 import os
 import time
@@ -14,59 +12,116 @@ import subprocess
 from datetime import datetime
 import requests
 
+from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QProgressBar, QTextEdit, QVBoxLayout, QGridLayout
+from PyQt6.QtCore import pyqtSignal, QObject, Qt, QTimer
+from PyQt6.QtGui import QFont, QPalette, QColor
+
+class WizardSignals(QObject):
+    """用於跨執行緒更新 UI 的信號"""
+    log = pyqtSignal(str, str)
+    status = pyqtSignal(str, str)
+    progress = pyqtSignal(float)
+    finished = pyqtSignal()
+
 class UpdateWizard:
-    def __init__(self, root, pid_to_wait, download_url, app_dir, exe_to_restart):
-        self.root = root
+    def __init__(self, pid_to_wait, download_url, app_dir, exe_to_restart):
         self.pid = int(pid_to_wait)
         self.app_dir = app_dir
         self.download_url = download_url
         self.exe_path = exe_to_restart
         self.update_finished = False  # 新增一個旗標來追蹤更新是否完成
 
-        self.root.title("橘Mouth 更新精靈")
-        self.root.geometry("500x380")
-        self.root.resizable(False, False)
+        self.signals = WizardSignals()
+        self._setup_ui()
+        self._connect_signals()
 
-        # --- 新的 UI 佈局 ---
-        self.root.grid_columnconfigure(0, weight=1)
-        self.root.grid_rowconfigure(3, weight=1)
+        QTimer.singleShot(100, self.start_update)
 
-        self.title_label = ctk.CTkLabel(self.root, text="橘Mouth 更新中", font=ctk.CTkFont(size=20, weight="bold"))
-        self.title_label.grid(row=0, column=0, padx=20, pady=(20, 10))
+    def _setup_ui(self):
+        self.win = QWidget()
+        self.win.setWindowTitle("橘Mouth 更新精靈")
+        self.win.setFixedSize(500, 380)
+        self.win.setStyleSheet("""
+            QWidget {{
+                background-color: #F0F2F5;
+                color: #212121;
+                font-family: 'Segoe UI', 'Microsoft JhengHei UI', sans-serif;
+            }}
+            QFrame, QLabel {{
+                background-color: transparent;
+            }
+            QProgressBar {{
+                border: none;
+                border-radius: 5px;
+                text-align: center;
+                background-color: #E9E9EB;
+            }}
+            QProgressBar::chunk {{
+                background-color: #007AFF;
+                border-radius: 4px;
+            }}
+            QTextEdit {{
+                background-color: #FFFFFF;
+                border: 1px solid #EAEAEA;
+                border-radius: 5px;
+                font-family: 'Consolas', 'Courier New', monospace;
+            }
+        """)
 
-        self.status_label = ctk.CTkLabel(self.root, text="準備開始更新...", font=ctk.CTkFont(size=14))
-        self.status_label.grid(row=1, column=0, padx=20, pady=(0, 5), sticky="w")
-        
-        self.progress_bar = ctk.CTkProgressBar(self.root)
-        self.progress_bar.set(0)
-        self.progress_bar.grid(row=2, column=0, padx=20, pady=(0, 10), sticky="ew")
+        layout = QVBoxLayout(self.win)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
 
-        self.log_text = ctk.CTkTextbox(self.root, font=("Consolas", 11), state="disabled")
-        self.log_text.grid(row=3, column=0, padx=20, pady=(0, 20), sticky="nsew")
+        self.title_label = QLabel("橘Mouth 更新中")
+        self.title_label.setFont(QFont("Microsoft JhengHei UI", 16, QFont.Weight.Bold))
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
-        # 將視窗置於最前
-        self.root.after(50, self.root.lift)
-        self.root.after(100, self.start_update)
+        self.status_label = QLabel("準備開始更新...")
+        self.status_label.setFont(QFont("Microsoft JhengHei UI", 10))
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 1000)
+        self.progress_bar.setValue(0)
+
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.status_label)
+        layout.addWidget(self.progress_bar)
+        layout.addWidget(self.log_text)
+
+        self.win.show()
+        self.win.activateWindow()
+        self.win.raise_()
+
+    def _connect_signals(self):
+        self.signals.log.connect(self._log_slot)
+        self.signals.status.connect(self._set_status_slot)
+        self.signals.progress.connect(self._set_progress_slot)
+        self.signals.finished.connect(self._on_finished)
 
     def _log(self, message, level="INFO"):
-        def upd():
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            formatted_msg = f"[{timestamp}] [{level.upper():<5}] {message}\n"
-            self.log_text.configure(state="normal")
-            self.log_text.insert(tk.END, formatted_msg)
-            self.log_text.see(tk.END)
-            self.log_text.configure(state="disabled")
-        self.root.after(0, upd)
+        self.signals.log.emit(message, level)
 
     def _set_progress(self, value):
-        self.root.after(0, lambda: self.progress_bar.set(value))
+        self.signals.progress.emit(value)
 
     def _set_status(self, text, color=None):
-        def upd():
-            self.status_label.configure(text=text)
-            if color: self.status_label.configure(text_color=color)
-        self.root.after(0, upd)
+        self.signals.status.emit(text, color or "")
+
+    def _log_slot(self, message, level):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        formatted_msg = f"[{timestamp}] [{level.upper():<5}] {message}"
+        self.log_text.append(formatted_msg)
+
+    def _set_status_slot(self, text, color):
+        self.status_label.setText(text)
+        if color:
+            self.status_label.setStyleSheet(f"color: {color};")
+
+    def _set_progress_slot(self, value):
+        self.progress_bar.setValue(int(value * 1000))
 
     def start_update(self):
         threading.Thread(target=self._update_thread, daemon=True).start()
@@ -184,7 +239,7 @@ class UpdateWizard:
                 status_text = "更新完成！正在重新啟動主程式..."
                 self._log(status_text)
                 self._set_status(status_text, color="green")
-                self.progress_bar.configure(progress_color="green")
+                self.progress_bar.setStyleSheet("QProgressBar::chunk { background-color: green; }")
                 self._set_progress(1.0)
                 
                 # --- 再次修正: 確保重啟時也絕不顯示視窗 ---
@@ -195,7 +250,7 @@ class UpdateWizard:
 
                 self._log("主程式已啟動，本視窗將自動關閉並進行自我清理。")
                 time.sleep(2)
-                self.root.after(0, self.root.destroy)
+                self.signals.finished.emit()
 
             except Exception as e:
                 # 錯誤處理：嘗試還原備份
@@ -209,7 +264,7 @@ class UpdateWizard:
                         self._log(f"從備份還原失敗: {restore_error!r}", "ERROR")
 
                 self._set_status("更新失敗！", color="red")
-                self.progress_bar.configure(progress_color="red")
+                self.progress_bar.setStyleSheet("QProgressBar::chunk { background-color: red; }")
                 self._log(f"更新過程中發生嚴重錯誤: {e!r}")
                 self._log("更新失敗！請手動重新啟動應用程式。")
                 # 在這種情況下，我們不自動關閉，讓使用者看到錯誤訊息
@@ -245,13 +300,13 @@ echo 清理完成，正在刪除此腳本...
                 self._log(f"自我清理失敗: {e!r}", "WARN")
             self.update_finished = True
 
-    def _on_closing(self):
+    def _on_finished(self):
         # 只有在更新完成後才允許關閉視窗
         if self.update_finished:
-            self.root.destroy()
+            self.win.close()
         else:
             self._log("更新正在進行中，請稍候...")
-
+            QTimer.singleShot(3000, self.win.close) # 如果更新失敗，3秒後也關閉
 def main():
     """
     入口函式。
@@ -268,10 +323,11 @@ def main():
 
     pid, download_url, app_dir, exe_path = sys.argv[1:5]
 
-    ctk.set_appearance_mode("System")
-    root = ctk.CTk()
-    app = UpdateWizard(root, pid, download_url, app_dir, exe_path)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    # 高 DPI 支援
+    QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+    wizard = UpdateWizard(pid, download_url, app_dir, exe_path)
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
     # 為了除錯，可以手動模擬參數

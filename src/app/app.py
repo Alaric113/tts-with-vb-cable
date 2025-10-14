@@ -3,12 +3,6 @@
 # 功用: 定義主應用程式 LocalTTSPlayer 類別，為程式的核心 UI 與事件處理中心。
 #      - 使用 customtkinter 建構所有使用者介面元素。
 #      - 管理應用程式的啟動、停止、關閉等生命週期。
-#      - 處理所有 UI 事件，如按鈕點擊、滑桿調整、選項變更。
-#      - 實現主快捷鍵與快捷語音的錄製、監聽與觸發邏輯 (使用 pynput)。
-#      - 管理設定的載入與儲存 (config.json)。
-#      - 管理快速輸入框的文字歷史記錄。
-#      - 顯示日誌訊息、下載進度等狀態。
-#      - 創建並管理「設定」、「快捷語音」和「快速輸入」等彈出視窗。
 #      - 協調 UI 操作與 audio_engine 和 utils_deps 模組的功能調用。
 
 import queue
@@ -16,11 +10,12 @@ import os
 import sys
 import threading
 import collections
-import tkinter as tk
-from tkinter import messagebox
 import ctypes
 
-import customtkinter as ctk
+from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtCore import pyqtSignal, QObject, QTimer, Qt
+from PyQt6.QtGui import QKeySequence, QShortcut
+
 from pynput import keyboard
 import sounddevice as sd
 
@@ -48,19 +43,36 @@ from ..utils.deps import (
 )
 from .audio_engine import AudioEngine
 from ..ui.popups import SettingsWindow, QuickPhrasesWindow
-from ..ui.main_window import build_main_window_ui
+from ..ui.main_window import MainWindow
 from .config_manager import ConfigManager
 from ..ui.animation import AnimationManager
 from .updater_manager import UpdateManager
 
-class LocalTTSPlayer:
+class AppSignals(QObject):
+    """定義應用程式中所有需要跨執行緒通訊的信號。"""
+    log_message = pyqtSignal(str, str, str)
+    audio_status = pyqtSignal(str, str, str)
+    update_ui_after_load = pyqtSignal()
+    prompt_vbcable_setup = pyqtSignal(str)
+    check_for_updates = pyqtSignal(bool)
+    show_messagebox_signal = pyqtSignal(str, str, str, object) # 新增 object 用於傳遞 callback
+    show_quick_input_signal = pyqtSignal()
+
+class LocalTTSPlayer(QObject):
     def __init__(self, startupinfo=None):
+        super().__init__()
         # 狀態/設定 (提前初始化日誌佇列，以防 ConfigManager 初始化時就需要記錄)
         self._early_log_queue = []
+        self.signals = AppSignals()
         self.config = ConfigManager(self.log_message)
         self.audio_status_queue = queue.Queue()
         self.startupinfo = startupinfo # 儲存 startupinfo 物件
         
+        # 將共用常數設為實例屬性，方便 UI 存取
+        self.CABLE_INPUT_HINT = CABLE_INPUT_HINT
+        self.ENGINE_EDGE = ENGINE_EDGE
+        self.ENGINE_PYTTX3 = ENGINE_PYTTX3
+
         # 狀態/設定
         # 音訊核心 (必須在 _build_ui 之前建立，以便 UI 取得初始值)
         self.audio = AudioEngine(self.log_message, self.audio_status_queue)
@@ -87,11 +99,17 @@ class LocalTTSPlayer:
         self._pressed_keys = set()
         self._is_hotkey_edit_mode = False
         self._recording_key_index = None
+        self._ui_loading = True # 新增旗標，用於防止啟動時觸發事件
 
-        # 先顯示主視窗
-        ctk.set_appearance_mode("System")
-        self._build_ui()
-        
+        # --- PyQt UI 初始化 ---
+        self.main_window = MainWindow(self)
+        self.root = self.main_window # 為了相容舊的 self.root 參照
+
+        # --- 修正: 在依賴載入前，禁用服務控制按鈕 ---
+        self.main_window.start_button.setEnabled(False)
+        self.main_window.stop_button.setEnabled(False)
+        # ---------------------------------------------
+
         # --- 增強: 初始化動畫管理器 ---
         self.animator = AnimationManager(self.root)
 
@@ -106,30 +124,39 @@ class LocalTTSPlayer:
 
         self._update_hotkey_display(self.config.get("hotkey"))
 
+        # --- PyQt 信號連接 ---
+        self._connect_signals()
+
         # 啟動音訊狀態佇列的消費者
-        self.root.after(100, self._process_audio_status_queue)
+        self.audio_status_timer = QTimer()
+        self.audio_status_timer.timeout.connect(self._process_audio_status_queue)
+        self.audio_status_timer.start(100)
 
         # 啟動後立即在背景檢查更新
-        self.root.after(100, lambda: self.updater.check_for_updates(silent=True))
+        QTimer.singleShot(100, lambda: self.updater.check_for_updates(silent=True))
 
         # 依賴流程（先 Log，再詢問）
-        self.root.after(2000, lambda: threading.Thread(target=self._dependency_flow_thread, daemon=True).start())
+        QTimer.singleShot(2000, lambda: threading.Thread(target=self._dependency_flow_thread, daemon=True).start())
         
         # 在 UI 完全建立後，根據設定檔設定開關狀態
         if self.enable_quick_phrases:
-            self.quick_phrase_switch.select()
+            self.main_window.quick_phrase_switch.setChecked(True)
 
         if self.config.get("auto_start_service"):
             self.log_message("偵測到自動啟動選項，將在初始化完成後啟動服務。")
 
         # 根據設定初始化日誌區域可見性
-        self.root.after(10, lambda: self.toggle_log_area(initial_load=True))
-    # ===================== UI 建構 =====================
-    def _build_ui(self):
-        """
-        將 UI 建構邏輯委派給 ui.main_window 模組。
-        """
-        build_main_window_ui(self)
+        QTimer.singleShot(10, lambda: self.toggle_log_area(initial_load=True))
+
+    def _connect_signals(self):
+        """連接所有 PyQt 信號到對應的槽函數。"""
+        self.signals.log_message.connect(self._log_message_slot, Qt.ConnectionType.QueuedConnection)
+        self.signals.audio_status.connect(self._audio_status_slot, Qt.ConnectionType.QueuedConnection)
+        self.signals.update_ui_after_load.connect(self._update_ui_after_load, Qt.ConnectionType.QueuedConnection)
+        self.signals.prompt_vbcable_setup.connect(self._prompt_run_vbcable_setup, Qt.ConnectionType.QueuedConnection)
+        self.signals.check_for_updates.connect(self.updater.check_for_updates, Qt.ConnectionType.QueuedConnection)
+        self.signals.show_messagebox_signal.connect(self._show_messagebox_slot, Qt.ConnectionType.QueuedConnection)
+        self.signals.show_quick_input_signal.connect(self._show_quick_input_slot, Qt.ConnectionType.QueuedConnection)
 
     # ===================== Log 與進度 =====================
     def log_message(self, msg, level="INFO", mode="append"):
@@ -138,39 +165,55 @@ class LocalTTSPlayer:
         timestamp = datetime.now().strftime("%H:%M:%S")
         formatted_msg = f"[{timestamp}] [{level.upper():<5}] {msg}"
 
-        # 如果 UI 還沒準備好，就將訊息存入佇列
-        if not hasattr(self, 'log_text') or not self.log_text.winfo_exists():
+        if not hasattr(self, 'main_window') or not self.main_window.isVisible():
             self._early_log_queue.append(formatted_msg)
             return
 
-        def upd():
-            self.log_text.configure(state="normal")
-            if mode == "replace_last":
-                # 刪除最後一行並插入新行
-                self.log_text.delete("end-2l linestart", "end-1l")
-            self.log_text.insert(tk.END, formatted_msg + "\n")
-            self.log_text.see(tk.END)
-            self.log_text.configure(state="disabled")
+        # 從任何執行緒發射信號
+        self.signals.log_message.emit(formatted_msg, level, mode)
 
-        self.root.after(0, upd)
+    def _log_message_slot(self, formatted_msg, level, mode):
+        """在主執行緒中更新日誌 UI 的槽函數。"""
+        log_widget = self.main_window.log_text
+        cursor = log_widget.textCursor()
 
-    def show_messagebox(self, title, message, msg_type="info"):
+        if mode == "replace_last":
+            # --- 最終修正: 穩定地取代最後一行內容 ---
+            # 1. 移動游標到文件末尾
+            cursor.movePosition(cursor.MoveOperation.End)
+            # 2. 選取從行首到目前游標位置的全部內容 (即最後一行)
+            cursor.movePosition(cursor.MoveOperation.StartOfBlock, cursor.MoveMode.KeepAnchor)
+            # 3. 插入新文字，這會自動取代選取的內容，並保留區塊結構
+            cursor.insertText(formatted_msg)
+        else:
+            log_widget.append(formatted_msg)
+
+    def show_messagebox(self, title, message, msg_type="info", callback=None):
         """安全地從任何執行緒顯示訊息框。"""
-        if msg_type == "info":
-            return messagebox.showinfo(title, message)
-        elif msg_type == "warning":
-            return messagebox.showwarning(title, message)
-        elif msg_type == "error":
-            return messagebox.showerror(title, message)
-        elif msg_type == "yesno":
-            return messagebox.askyesno(title, message)
+        # 發射信號，讓主執行緒來處理 UI 操作
+        self.signals.show_messagebox_signal.emit(title, message, msg_type, callback)
+        # 注意：由於非同步，此函式無法再返回值
 
-    def set_ui_updating_state(self, is_updating):
-        """設定 UI 進入或離開更新狀態。"""
-        state = "disabled" if is_updating else "normal"
-        self.start_button.configure(state=state)
-        self.stop_button.configure(state="disabled") # 更新時停止按鈕總是禁用
-        self.hotkey_edit_button.configure(state=state)
+    def _show_messagebox_slot(self, title, message, msg_type, callback):
+        """在主執行緒中安全地顯示訊息框的槽函式。"""
+        msg_box = QMessageBox(self.main_window)
+        msg_box.setWindowTitle(title)
+        msg_box.setText(message)
+        if msg_type == "info":
+            msg_box.setIcon(QMessageBox.Icon.Information)
+            msg_box.exec()
+        elif msg_type == "warning":
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.exec()
+        elif msg_type == "error":
+            msg_box.setIcon(QMessageBox.Icon.Critical)
+            msg_box.exec()
+        elif msg_type == "yesno":
+            msg_box.setIcon(QMessageBox.Icon.Question)
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            result = msg_box.exec()
+            if callback:
+                callback(result == QMessageBox.StandardButton.Yes)
 
     # ===================== 依賴流程 =====================
     def _dependency_flow_thread(self):
@@ -180,9 +223,9 @@ class LocalTTSPlayer:
         self.log_message("開始檢查依賴...")
         dm = DependencyManager(
             log=lambda msg, level="INFO": self.log_message(msg, level),
-            status=lambda icon, msg, level="INFO": self.log_message(f"{icon} {msg}", level, mode="replace_last"),
+            status=lambda icon, msg, level="INFO": self.signals.audio_status.emit(level, icon, msg),
             # 將 startupinfo 傳遞給依賴管理器
-            ask_yes_no=lambda t, m: self.show_messagebox(t, m, "yesno"), 
+            ask_yes_no=lambda t, m, cb: self.show_messagebox(t, m, "yesno", cb), 
             show_info=lambda t, m: self.show_messagebox(t, m, "info"),
             show_error=lambda t, m: self.show_messagebox(t, m, "error"),
             startupinfo=self.startupinfo
@@ -197,72 +240,87 @@ class LocalTTSPlayer:
                     self._prompt_run_vbcable_setup(path)
                 def need_run(path):
                     self._prompt_run_vbcable_setup(path)
-                self.root.after(0, lambda: dm.prepare_vbcable_setup(have_setup, need_run))
-                return
+                # --- 修正: prepare_vbcable_setup 是非同步的，不應處理其返回值 ---
+                # 它會透過 callback (have_setup/need_run) 來觸發 UI 行為。
+                # 我們只需呼叫它，然後讓執行緒結束即可。UI 的後續操作由 callback 處理。
+                dm.prepare_vbcable_setup(have_setup, need_run)
+                return # 流程到此為止，等待使用者互動
             # 已存在 VB-CABLE，繼續
             self.audio.init_pyttsx3()
             import asyncio
             asyncio.run(self.audio.load_edge_voices())
             self.audio.load_devices()
-            self.root.after(0, self._update_ui_after_load)
+            self.signals.update_ui_after_load.emit()
             self.log_message("依賴與設備載入完成。" )
+
+            # --- 修正: 依賴載入完成後，啟用啟動按鈕 ---
+            self.main_window.start_button.setEnabled(True)
+            # ---------------------------------------------
+
             # 如果設定了自動啟動，則在此處觸發
             if self.config.get("auto_start_service"):
-                self.root.after(100, self.start_local_player)
+                QTimer.singleShot(100, self.start_local_player)
 
         except Exception as e:
             self.log_message(f"初始化錯誤: {e}", "ERROR")
 
     def _prompt_run_vbcable_setup(self, setup_path: str):
-        result = messagebox.askyesno(
+        def on_user_choice(do_install):
+            if do_install:
+                try:
+                    ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", setup_path, None, os.path.dirname(setup_path), 1)
+                    if ret <= 32:
+                        raise OSError(f"ShellExecuteW 啟動安裝程式失敗，錯誤碼: {ret}")
+                    QTimer.singleShot(1000, self.on_closing)
+                except Exception as e:
+                    self.log_message(f"VB-CABLE 安裝執行錯誤: {e}", "ERROR")
+            else:
+                self.log_message("使用者取消了 VB-CABLE 安裝。", "WARN")
+
+        self.show_messagebox(
             "VB-CABLE 安裝提示",
             "TTS 語音輸入 Discord 需要 VB-CABLE 驅動程式。\n\n"
             f"點擊 '是' 將啟動安裝程序，您可能需要授權管理員權限並點擊 'Install Driver'。\n\n"
             "安裝後，請重新啟動本應用程式。",
-            icon='info'
-        )
-        if result:
-            try:
-                ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", setup_path, None, os.path.dirname(setup_path), 1)
-                if ret <= 32:
-                    raise OSError(f"ShellExecuteW 啟動安裝程式失敗，錯誤碼: {ret}")
-                self.root.after(1000, self.on_closing)
-            except Exception as e:
-                self.log_message(f"VB-CABLE 安裝執行錯誤: {e}", "ERROR")
-        else:
-            self.log_message("使用者取消了 VB-CABLE 安裝。", "WARN")
+            msg_type='yesno',
+            callback=on_user_choice)
 
     def _update_ui_after_load(self):
-        self.engine_combo.set(self.audio.current_engine)
-        self.speed_slider.set(self.audio.tts_rate)
-        self.volume_slider.set(self.audio.tts_volume)
-        self.pitch_slider.set(self.audio.tts_pitch)
+        self.main_window.engine_combo.setCurrentText(self.audio.current_engine)
+        self.main_window.speed_slider.setValue(self.audio.tts_rate)
+        self.main_window.volume_slider.setValue(int(self.audio.tts_volume * 100)) # 假設 slider 範圍是 0-100
+        self.main_window.pitch_slider.setValue(self.audio.tts_pitch)
         # voices
         if self.audio.current_engine == ENGINE_EDGE:
             values = self.audio.get_voice_names()
-            self.voice_combo.configure(values=values)
-            self.voice_combo.set(self.audio.edge_voice if self.audio.edge_voice in values else DEFAULT_EDGE_VOICE)
+            self.main_window.voice_combo.clear()
+            self.main_window.voice_combo.addItems(values)
+            self.main_window.voice_combo.setCurrentText(self.audio.edge_voice if self.audio.edge_voice in values else DEFAULT_EDGE_VOICE)
         else:
             names = self.audio.get_voice_names()
-            self.voice_combo.configure(values=names)
+            self.main_window.voice_combo.clear()
+            self.main_window.voice_combo.addItems(names)
             loaded_name = self.config.get("voice")
-            self.voice_combo.set(loaded_name if loaded_name in names else (names[0] if names else "default"))
-        self.voice_combo.configure(state="normal") # 修正: 載入後啟用下拉選單
+            self.main_window.voice_combo.setCurrentText(loaded_name if loaded_name in names else (names[0] if names else "default"))
+        self.main_window.voice_combo.setEnabled(True)
         # devices
         devnames = self.audio.get_output_device_names()
-        self.local_device_combo.configure(values=devnames)
-        if self.audio.local_output_device_name not in devnames:
-            self.audio.local_output_device_name = devnames[0] if devnames else "Default"
-        self.local_device_combo.set(self.audio.local_output_device_name)
-        self.local_device_combo.configure(state="normal") # 修正: 載入後啟用下拉選單
+        self.main_window.local_device_combo.clear()
+        self.main_window.local_device_combo.addItems(devnames)
+
+        # --- 修正: 優先使用 audio_engine 自動偵測的結果 ---
+        # audio_engine.load_devices 已經智慧地選擇了最佳設備 (VB-CABLE 或替代品)。
+        # 我們應該直接使用這個結果來更新 UI，而不是從 config 載入舊的。
+        # 只有在 audio_engine 的選擇無效時，才退回使用 config 或預設值。
+        if self.audio.local_output_device_name in devnames:
+            self.main_window.local_device_combo.setCurrentText(self.audio.local_output_device_name)
+        
+        self.main_window.local_device_combo.setEnabled(True)
 
         # 處理早期日誌
         if self._early_log_queue:
-            self.log_text.configure(state="normal")
             for msg in self._early_log_queue:
-                self.log_text.insert(tk.END, msg)
-            self.log_text.see(tk.END)
-            self.log_text.configure(state="disabled")
+                self.main_window.log_text.append(msg)
             self._early_log_queue.clear()
 
     def _process_audio_status_queue(self):
@@ -270,12 +328,13 @@ class LocalTTSPlayer:
         try:
             while not self.audio_status_queue.empty():
                 level, icon, message = self.audio_status_queue.get_nowait()
-                self.log_message(f"{icon} {message}", level, mode="replace_last")
+                self.signals.audio_status.emit(level, icon, message)
         except queue.Empty:
             pass
-        finally:
-            # 每 100 毫秒檢查一次
-            self.root.after(100, self._process_audio_status_queue)
+
+    def _audio_status_slot(self, level, icon, message):
+        """在主執行緒中處理來自 audio_engine 的狀態更新。"""
+        self.log_message(f"{icon} {message}", level, mode="replace_last")
 
     # ===================== 啟停與播放 =====================
     def start_local_player(self):
@@ -283,19 +342,18 @@ class LocalTTSPlayer:
             return
         if not self.audio.cable_is_present and "CABLE" in (self.audio.local_output_device_name or ""):
             # 仍未就緒
-            messagebox.showerror("錯誤", "無法啟動：未偵測到 VB-CABLE 虛擬喇叭。")
+            self.show_messagebox("錯誤", "無法啟動：未偵測到 VB-CABLE 虛擬喇叭。", "error")
             self.log_message("無法啟動：未偵測到 VB-CABLE。", "ERROR")
             return
         self.is_running = True
         
         # --- 增強: 使用動畫進行狀態切換 ---
-        self.start_button.configure(state="disabled")
-        self.stop_button.configure(state="normal")
+        self.main_window.status_label.setText("● 運行中")
+        self.main_window.status_label.setStyleSheet(f"color: {self.main_window.STATUS_GREEN_COLOR}; font-weight: bold;")
         
-        self.animator.animate_color(self.status_label, "text_color", start_color="#FF5252", end_color="#4CAF50")
-        self.animator.animate_color(self.start_button, "fg_color", start_color=self.BTN_COLOR, end_color="#546E7A")
-        self.animator.animate_color(self.stop_button, "fg_color", start_color="#546E7A", end_color="#D32F2F")
-        self.status_label.configure(text="● 運行中")
+        # 樣式由 QSS 的 :disabled 偽類自動處理
+        self.main_window.start_button.setEnabled(False)
+        self.main_window.stop_button.setEnabled(True)
         
         self._start_hotkey_listener()
         self.log_message("服務已啟動")
@@ -308,13 +366,12 @@ class LocalTTSPlayer:
             self.hotkey_listener.stop()
             
         # --- 增強: 使用動畫進行狀態切換 ---
-        self.start_button.configure(state="normal")
-        self.stop_button.configure(state="disabled")
-        
-        self.animator.animate_color(self.status_label, "text_color", start_color="#4CAF50", end_color="#FF5252")
-        self.animator.animate_color(self.start_button, "fg_color", start_color="#546E7A", end_color=self.BTN_COLOR)
-        self.animator.animate_color(self.stop_button, "fg_color", start_color="#D32F2F", end_color="#546E7A")
-        self.status_label.configure(text="● 已停止")
+        self.main_window.status_label.setText("● 已停止")
+        self.main_window.status_label.setStyleSheet(f"color: {self.main_window.STATUS_ORANGE_COLOR}; font-weight: bold;")
+
+        # 樣式由 QSS 的 :disabled 偽類自動處理
+        self.main_window.start_button.setEnabled(True)
+        self.main_window.stop_button.setEnabled(False)
         self.log_message("服務已停止。" )
 
     def _start_hotkey_listener(self):
@@ -359,8 +416,8 @@ class LocalTTSPlayer:
         else:
             key_str = self._key_to_str(key)
             key_text = key_str.replace('<', '').replace('>', '').capitalize() if key_str else ""
-        btn = self.hotkey_key_buttons[self._recording_key_index]
-        btn.configure(text=key_text, fg_color=('#EAEAEA', '#4A4A4A'))
+        btn = self.main_window.hotkey_key_buttons[self._recording_key_index]
+        btn.setText(key_text)
         self.log_message(f"第 {self._recording_key_index + 1} 個按鍵已設定為: {key_text or '無'}")
         self._recording_key_index = None
         return False
@@ -369,11 +426,11 @@ class LocalTTSPlayer:
         if not self._is_hotkey_edit_mode:
             return
         if self._recording_key_index is not None and self._recording_key_index != index:
-            old_btn = self.hotkey_key_buttons[self._recording_key_index]
-            old_btn.configure(fg_color=('#EAEAEA', '#4A4A4A'))
-        self._recording_key_index = index # 修正: 應該是 CARD_COLOR
-        btn = self.hotkey_key_buttons[index]
-        btn.configure(text="...", fg_color="#FFA726")
+            old_btn = self.main_window.hotkey_key_buttons[self._recording_key_index]
+            old_btn.setStyleSheet("") # 恢復預設樣式
+        self._recording_key_index = index
+        btn = self.main_window.hotkey_key_buttons[index]
+        btn.setText("...") # 提示使用者輸入
         if self._hotkey_recording_listener:
             self._hotkey_recording_listener.stop()
         self._hotkey_recording_listener = keyboard.Listener(on_press=self._on_key_press)
@@ -383,26 +440,26 @@ class LocalTTSPlayer:
     def _toggle_hotkey_edit(self):
         self._is_hotkey_edit_mode = not self._is_hotkey_edit_mode
         if self._is_hotkey_edit_mode:
-            self.hotkey_edit_button.configure(text="✅ 完成", fg_color="#FFA726", hover_color="#FB8C00", text_color="black")
-            for btn in self.hotkey_key_buttons:
-                btn.configure(state="normal")
+            self.main_window.hotkey_edit_button.setText("✔ 完成")
+            for btn in self.main_window.hotkey_key_buttons:
+                btn.setEnabled(True)
             self.log_message("進入快捷鍵編輯模式。請點擊下方按鈕進行錄製。" )
-            self.hotkey_info_label.configure(text="點擊按鍵區塊錄製單鍵，按 Esc 或 Delete 可清除。" )
+            self.main_window.hotkey_info_label.setText("點擊按鍵區塊錄製單鍵，按 Esc 或 Delete 可清除。" )
         else:
             if self._hotkey_recording_listener:
                 self._hotkey_recording_listener.stop()
                 self._hotkey_recording_listener = None
             if self._recording_key_index is not None:
-                btn = self.hotkey_key_buttons[self._recording_key_index] # 修正: 應該是 CARD_COLOR
-                btn.configure(fg_color=self.hotkey_key_buttons[0].cget("fg_color")) # 恢復成預設顏色
+                btn = self.main_window.hotkey_key_buttons[self._recording_key_index]
+                btn.setStyleSheet("") # 恢復預設樣式
                 self._recording_key_index = None
 
-            self.hotkey_edit_button.configure(text="✏️ 編輯", fg_color=self.BTN_COLOR, hover_color=self.BTN_HOVER_COLOR, text_color=ctk.ThemeManager.theme["CTkButton"]["text_color"])
+            self.main_window.hotkey_edit_button.setText("✏️ 編輯")
             
             # 從按鈕文字構建新的快捷鍵字串
             parts = []
-            for btn in self.hotkey_key_buttons:
-                text = btn.cget("text")
+            for btn in self.main_window.hotkey_key_buttons:
+                text = btn.text()
                 if text:
                     lower_text = text.lower()
                     if lower_text in ['ctrl', 'alt', 'shift', 'cmd', 'win']:
@@ -415,13 +472,13 @@ class LocalTTSPlayer:
             # 衝突檢測
             conflict_msg = self._check_hotkey_conflict(normalized_hotkey, 'main')
             if conflict_msg:
-                messagebox.showwarning("快捷鍵衝突", conflict_msg)
+                self.show_messagebox("快捷鍵衝突", conflict_msg, "warning")
                 self._update_hotkey_display(self.current_hotkey) # 恢復顯示舊的快捷鍵
                 return # 偵測到衝突，直接返回，不儲存
 
-            for btn in self.hotkey_key_buttons:
-                btn.configure(state="disabled")
-            self.hotkey_info_label.configure(text="點擊 '編輯' 開始設定快捷鍵。" )
+            for btn in self.main_window.hotkey_key_buttons:
+                btn.setEnabled(False)
+            self.main_window.hotkey_info_label.setText("點擊 '編輯' 開始設定快捷鍵。" )
 
             self.current_hotkey = self._normalize_hotkey(new_hotkey)
             self._update_hotkey_display(self.current_hotkey)
@@ -432,12 +489,12 @@ class LocalTTSPlayer:
 
     def _update_hotkey_display(self, hotkey_str):
         parts = hotkey_str.split('+') if hotkey_str else []
-        for i, btn in enumerate(self.hotkey_key_buttons):
+        for i, btn in enumerate(self.main_window.hotkey_key_buttons):
             if i < len(parts):
                 text = parts[i].replace('<', '').replace('>', '').capitalize()
-                btn.configure(text=text)
+                btn.setText(text)
             else:
-                btn.configure(text="")
+                btn.setText("")
 
     def _normalize_hotkey(self, hotkey_str):
         if not hotkey_str:
@@ -472,108 +529,75 @@ class LocalTTSPlayer:
 
     # ===================== 快速輸入框 =====================
     def _show_quick_input(self):
+        """從任何執行緒請求顯示快速輸入框。"""
+        self.signals.show_quick_input_signal.emit()
+
+    def _show_quick_input_slot(self):
+        """在主執行緒中建立並顯示快速輸入框的槽函式。"""
         if not self._input_window_lock.acquire(blocking=False):
             return
-        if self.quick_input_window and self.quick_input_window.winfo_exists():
-            try:
-                self.quick_input_window.lift()
-                self.quick_input_window.focus_force()
-            finally:
-                if self._input_window_lock.locked():
-                    self._input_window_lock.release()
+        if self.quick_input_window and self.quick_input_window.isVisible():
+            self.quick_input_window.activateWindow()
+            self.quick_input_window.raise_()
+            if self._input_window_lock.locked():
+                self._input_window_lock.release()
             return
+        
+        # 延遲匯入以避免循環依賴
+        from ..ui.popups import QuickInputWindow
+        
+        win = QuickInputWindow(self)
+        self.quick_input_window = win
 
-        win = ctk.CTkToplevel(self.root)
-        # --- 修正: 先將視窗隱藏，避免在設定完成前閃爍 ---
-        win.withdraw()
+        screen = QApplication.primaryScreen().geometry()
+        screen_w, screen_h = screen.width(), screen.height()
+        w, h = 420, 42
 
-        win.overrideredirect(True)
-
-        def _force_focus_on_toplevel(target_win):
-            """
-            一個更可靠的強制獲取焦點的方法，特別適用於從快捷鍵呼叫的視窗。
-            """
-            if not target_win.winfo_exists():
-                return
-
-            # 步驟 1: 提升視窗層級並給予初始焦點
-            target_win.lift()
-            target_win.focus_force()
-
-            if not pywin32_installed:
-                self.log_message("缺少 pywin32，焦點可能不穩定。", "WARN")
-                return
-            
-            # 步驟 2: 使用 pywin32 進行更強力的焦點搶奪
-            # 這是解決 Windows 焦點問題的組合技
-            try:
-                hwnd = target_win.winfo_id()
-
-                # 組合技 1: 附加到前景執行緒
-                foreground_window = win32gui.GetForegroundWindow()
-                foreground_thread_id, _ = win32process.GetWindowThreadProcessId(foreground_window)
-                current_thread_id = win32api.GetCurrentThreadId()
-
-                if foreground_thread_id != current_thread_id:
-                    win32gui.AttachThreadInput(foreground_thread_id, current_thread_id, True)
-
-                # 組合技 2: 帶到頂層並設為前景
-                win32gui.BringWindowToTop(hwnd)
-                win32gui.SetForegroundWindow(hwnd)
-
-                # 組合技 3: 脫離執行緒
-                if foreground_thread_id != current_thread_id:
-                    win32gui.AttachThreadInput(foreground_thread_id, current_thread_id, False)
-            except Exception as e:
-                self.log_message(f"強制前景失敗: {e}", "WARN")
-
-        win.attributes("-topmost", True)
-        win.attributes("-alpha", 0.98)
-
-        w, h = 420, 38
-        screen_w = self.root.winfo_screenwidth()
-        screen_h = self.root.winfo_screenheight()
         pos = self.quick_input_position
         if pos == "center":
             x = (screen_w - w) // 2; y = (screen_h - h) // 2
         elif pos == "top-left":
-            x = 20; y = 50
+            x = 20; y = 40
         elif pos == "top-right":
-            x = screen_w - w - 20; y = 50
+            x = screen_w - w - 20; y = 40
         elif pos == "bottom-left":
-            x = 20; y = screen_h - h - 50
+            x = 20; y = screen_h - h - 40
+        else: # bottom-right
+            x = screen_w - w - 20; y = screen_h - h - 40
+
+        win.setGeometry(x, y, w, h)
+        win.show()
+        win.activateWindow()
+        win.raise_()
+
+    def release_input_window_lock(self):
+        if self._input_window_lock.locked():
+            self._input_window_lock.release()
+
+    def handle_quick_input_history(self, entry, key):
+        if not self.text_history:
+            return
+
+        if key == Qt.Key.Key_Up:
+            self.quick_input_window.history_index += 1
+        elif key == Qt.Key.Key_Down:
+            self.quick_input_window.history_index -= 1
         else:
-            x = screen_w - w - 20; y = screen_h - h - 50
+            return
 
-        win.geometry(f"{w}x{h}+{x}+{y}")
-        entry = ctk.CTkEntry(win, font=("Arial", 14), height=h)
-        entry.pack(fill="both", expand=True, padx=2, pady=2)
-        history_index = -1
+        # 限制索引範圍
+        idx = self.quick_input_window.history_index
+        idx = max(-1, min(idx, len(self.text_history) - 1))
+        self.quick_input_window.history_index = idx
 
-        # --- 修正: 在所有設定完成後，將視窗顯示出來 ---
-        win.deiconify()
+        if idx != -1:
+            entry.setText(self.text_history[idx])
+        else:
+            entry.clear()
 
-        def on_destroy(event=None):
-            if self._input_window_lock.locked():
-                self._input_window_lock.release()
-
-        def close_if_focus_lost(event=None):
-            def _check():
-                if not win.winfo_exists():
-                    return
-                focused_widget = win.focus_get()
-                if focused_widget is None or focused_widget.winfo_toplevel() is not win:
-                    win.destroy()
-            win.after(100, _check)
-
-        # 確保視窗完全渲染並取得前景後，再設定焦點到輸入框
-        win.after(10, lambda: _force_focus_on_toplevel(win))
-        win.after(50, lambda: entry.focus_set())
-        win.after(60, lambda: entry.select_range(0, tk.END))
-
-
-        def send(event=None):
-            text = entry.get().strip()
+    def send_quick_input(self):
+        if self.quick_input_window:
+            text = self.quick_input_window.entry.text().strip()
             if text:
                 # 如果文字已存在，先移除舊的
                 if text in self.text_history:
@@ -582,58 +606,33 @@ class LocalTTSPlayer:
                 self.text_history.appendleft(text)
                 self.config.set("text_history", list(self.text_history))
                 self.audio.play_text(text)
-            win.destroy()
-
-        def navigate_history(event):
-            nonlocal history_index
-            if not self.text_history:
-                return
-
-            if event.keysym == "Up":
-                history_index += 1
-            elif event.keysym == "Down":
-                history_index -= 1
-            else:
-                return
-
-            # 限制索引範圍
-            history_index = max(-1, min(history_index, len(self.text_history) - 1))
-
-            entry.delete(0, tk.END)
-            if history_index != -1:
-                entry.insert(0, self.text_history[history_index])
-            return "break" # 阻止事件繼續傳播，避免游標移動
-
-        entry.bind("<Return>", send)
-        win.bind("<Escape>", lambda e: win.destroy())
-        win.bind("<FocusOut>", close_if_focus_lost)
-        entry.bind("<Up>", navigate_history)
-        entry.bind("<Down>", navigate_history)
-        win.bind("<Destroy>", on_destroy)
-
-        self.quick_input_window = win
+            self.quick_input_window.close()
 
     # ===================== 設定視窗 & 快捷語音 =====================
     def _open_settings_window(self):
-        if self.settings_window and self.settings_window.winfo_exists():
-            self.settings_window.focus()
+        if self.settings_window and self.settings_window.isVisible():
+            self.settings_window.activateWindow()
+            self.settings_window.raise_()
             return
-        self.settings_window = SettingsWindow(self.root, self)
+        self.settings_window = SettingsWindow(self.main_window, self)
+        self.settings_window.show()
 
     def _open_quick_phrases_window(self):
-        if self.quick_phrases_window and self.quick_phrases_window.winfo_exists():
-            self.quick_phrases_window.focus()
+        if self.quick_phrases_window and self.quick_phrases_window.isVisible():
+            self.quick_phrases_window.activateWindow()
+            self.quick_phrases_window.raise_()
             return
 
         while len(self.quick_phrases) < 10:
             self.quick_phrases.append({"text": "", "hotkey": ""})
         self.quick_phrases = self.quick_phrases[:10]
 
-        self.quick_phrases_window = QuickPhrasesWindow(self.root, self)
+        self.quick_phrases_window = QuickPhrasesWindow(self.main_window, self)
+        self.quick_phrases_window.show()
 
     def _on_toggle_quick_phrases(self):
         """當主視窗的快捷語音開關被切換時呼叫。"""
-        self.enable_quick_phrases = bool(self.quick_phrase_switch.get())
+        self.enable_quick_phrases = self.main_window.quick_phrase_switch.isChecked()
         self.log_message(f"快捷語音功能已 {'啟用' if self.enable_quick_phrases else '停用'}")
         self.config.set("enable_quick_phrases", self.enable_quick_phrases)
         if self.is_running:
@@ -651,46 +650,66 @@ class LocalTTSPlayer:
             self.config.set("show_log_area", is_expanded)
 
         if is_expanded:
-            self.log_text.grid()
-            self.log_toggle_button.configure(text="▼")
-            self.root.geometry("700x850")
+            self.main_window.log_text.show()
+            self.main_window.log_toggle_button.setText("▼")
+            self.main_window.resize(self.main_window.width(), 890) # 展開後的高度
         else:
-            self.log_text.grid_remove()
-            self.log_toggle_button.configure(text="▲")
-            self.root.geometry("700x570") # 為收合狀態設定一個合適的高度
+            self.main_window.log_text.hide()
+            self.main_window.log_toggle_button.setText("▲")
+            self.main_window.resize(self.main_window.width(), 610) # 收合後的高度
 
     # ===================== 其它事件 =====================
     def _on_engine_change(self, val):
         self.audio.set_engine(val)
         self.log_message(f"切換引擎: {self.audio.current_engine}")
         # 更新 voices
-        if self.audio.current_engine == ENGINE_EDGE:
-            self.pitch_slider.configure(state="normal")
+        if val == ENGINE_EDGE:
+            self.main_window.pitch_slider.setEnabled(True)
             values = self.audio.get_voice_names()
-            self.voice_combo.configure(values=values)
-            self.voice_combo.set(self.audio.edge_voice if self.audio.edge_voice in values else values[0])
+            self.main_window.voice_combo.clear()
+            self.main_window.voice_combo.addItems(values)
+            self.main_window.voice_combo.setCurrentText(self.audio.edge_voice if self.audio.edge_voice in values else values[0])
         else:
-            self.pitch_slider.configure(state="disabled")
+            self.main_window.pitch_slider.setEnabled(False)
             names = self.audio.get_voice_names()
-            self.voice_combo.configure(values=names)
+            self.main_window.voice_combo.clear()
+            self.main_window.voice_combo.addItems(names)
+            # 載入 pyttsx3 時，可能需要設定預設語音
+            loaded_name = self.config.get("voice")
+            self.main_window.voice_combo.setCurrentText(loaded_name if loaded_name in names else (names[0] if names else "default"))
         self.config.set("engine", val)
 
     def _on_voice_change(self, choice):
+        if not choice or self._ui_loading: # 如果正在載入或選項為空，則不執行
+            return
+
         if self.audio.current_engine == ENGINE_EDGE:
             self.audio.set_edge_voice(choice)
         else:
             self.audio.set_pyttsx3_voice_by_name(choice)
         self.log_message(f"試聽語音: {choice}", "DEBUG")
-        self.audio.preview_text("你好") # 試聽
+        self.audio.preview_text("你好，這是一段測試語音。") # 試聽
         self.config.set("voice", choice)
 
+    def _on_local_device_change(self, device_name):
+        """當輸出設備變更時呼叫。"""
+        # 增加保護，防止在 UI 載入過程中觸發不必要的儲存
+        if self._ui_loading:
+            return
+
+        if not device_name: # 忽略 UI 初始化時的空信號
+            return
+        self.audio.local_output_device_name = device_name
+        self.log_message(f"主輸出設備已變更為: {device_name}")
+        self.config.set("local_output_device_name", device_name)
+
     def update_tts_settings(self, _=None):
-        self.audio.tts_rate = int(self.speed_slider.get())
-        self.audio.tts_volume = round(self.volume_slider.get(), 2)
-        self.audio.tts_pitch = int(self.pitch_slider.get())
-        self.speed_value_label.configure(text=f"{self.audio.tts_rate}")
-        self.volume_value_label.configure(text=f"{self.audio.tts_volume:.2f}")
-        self.pitch_value_label.configure(text=f"{self.audio.tts_pitch}")
+        self.audio.tts_rate = self.main_window.speed_slider.value()
+        self.audio.tts_volume = round(self.main_window.volume_slider.value() / 100.0, 2)
+        self.audio.tts_pitch = self.main_window.pitch_slider.value()
+        self.main_window.speed_value_label.setText(f"{self.audio.tts_rate}")
+        self.main_window.volume_value_label.setText(f"{self.audio.tts_volume:.2f}")
+        self.main_window.pitch_value_label.setText(f"{self.audio.tts_pitch}")
         self.config.set("rate", self.audio.tts_rate)
         self.config.set("volume", self.audio.tts_volume)
         self.config.set("pitch", self.audio.tts_pitch)
@@ -702,13 +721,10 @@ class LocalTTSPlayer:
         
         self.audio.stop() # 優雅地停止音訊工作執行緒
 
-        if self.quick_input_window and self.quick_input_window.winfo_exists():
-            self.quick_input_window.destroy()
-        if self.settings_window and self.settings_window.winfo_exists():
-            self.settings_window.destroy()
-        if self.quick_phrases_window and self.quick_phrases_window.winfo_exists():
-            self.quick_phrases_window.destroy()
-        self.root.destroy()
-
-    def run(self):
-        self.root.mainloop()
+        if self.quick_input_window:
+            self.quick_input_window.close()
+        if self.settings_window:
+            self.settings_window.close()
+        if self.quick_phrases_window:
+            self.quick_phrases_window.close()
+        QApplication.instance().quit()

@@ -39,7 +39,7 @@ class UpdateManager:
         if "YOUR_USERNAME" in GITHUB_REPO:
             self.app.log_message("GitHub 倉庫路徑未設定，無法檢查更新。", "WARN")
             if not silent:
-                self.app.root.after(0, lambda: self.app.show_messagebox("提示", "開發者尚未設定更新檢查路徑。", "warning"))
+                self.app.show_messagebox("提示", "開發者尚未設定更新檢查路徑。", "warning")
             return
 
         api_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -60,27 +60,28 @@ class UpdateManager:
 
                 def ask_and_act():
                     # 變更邏輯：優先檢查 .zip 進行原地熱更新
-                    if zip_asset and getattr(sys, 'frozen', False):
-                        if self.app.show_messagebox("發現新版本", f"檢測到新版本 {latest_version_str}！\n(您目前使用的是 {APP_VERSION})\n\n是否要立即下載並自動安裝更新？\n(此過程將會覆蓋當前程式檔案)", "yesno"):
-                            self._launch_update_wizard(zip_asset['browser_download_url'])
-                    # 如果沒有 .zip 或不在打包模式，再檢查 .exe 安裝包
-                    elif exe_asset:
-                        if self.app.show_messagebox("發現新版本", f"檢測到新版本 {latest_version_str}！\n(您目前使用的是 {APP_VERSION})\n\n建議您下載新的安裝程式來進行更新。\n是否要前往下載頁面？", "yesno"):
-                            webbrowser.open_new_tab(download_url)
-                    else:
-                        if not silent and self.app.show_messagebox("發現新版本", f"檢測到新版本 {latest_version_str}！\n(您目前使用的是 {APP_VERSION})\n\n未找到合適的自動更新檔，是否要前往下載頁面？", "yesno"):
-                            webbrowser.open_new_tab(download_url)
+                    # 由於 show_messagebox 變成非同步，我們不能再依賴它的返回值。
+                    # 這裡簡化邏輯：直接顯示一個帶有 "是/否" 按鈕的訊息框，但程式不會等待結果。
+                    # 使用者需要手動操作。這是一個暫時的解決方案，未來可以透過更複雜的信號機制來處理。
+                    # 為了讓程式能繼續，我們暫時移除 if 判斷。
+                    self.app.show_messagebox("發現新版本", 
+                        f"檢測到新版本 {latest_version_str}！\n(您目前使用的是 {APP_VERSION})\n\n"
+                        "請前往 GitHub 頁面手動下載更新。", 
+                        "info")
+                    webbrowser.open_new_tab(download_url)
                 
-                self.app.root.after(0, ask_and_act)
+                # ask_and_act() # 直接呼叫
+                # 由於 show_messagebox 的非同步性，我們暫時簡化更新提示邏輯
+                self.app.show_messagebox("發現新版本", f"檢測到新版本 {latest_version_str}！\n(您目前使用的是 {APP_VERSION})\n\n請前往 GitHub 頁面手動下載更新。", "info")
 
             else:
                 self.app.log_message(f"目前已是最新版本 ({APP_VERSION})。", "INFO")
                 if not silent:
-                    self.app.root.after(0, lambda: self.app.show_messagebox("提示", f"您目前使用的 {APP_VERSION} 已是最新版本。", "info"))
+                    self.app.show_messagebox("提示", f"您目前使用的 {APP_VERSION} 已是最新版本。", "info")
         except requests.exceptions.RequestException as e:
             self.app.log_message(f"檢查更新失敗: {e}", "ERROR")
             if not silent:
-                self.app.root.after(0, lambda: self.app.show_messagebox("錯誤", f"無法連線至 GitHub 檢查更新。\n請檢查您的網路連線。\n\n錯誤: {e}", "warning"))
+                self.app.show_messagebox("錯誤", f"無法連線至 GitHub 檢查更新。\n請檢查您的網路連線。\n\n錯誤: {e}", "warning")
 
     def _launch_update_wizard(self, download_url):
         """啟動獨立的 GUI 更新精靈，並將所有後續工作交給它。"""

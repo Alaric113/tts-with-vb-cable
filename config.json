@@ -1,7 +1,7 @@
 {
     "engine": "edge-tts",
     "voice": "zh-CN-XiaoxiaoNeural",
-    "rate": 175,
+    "rate": 170,
     "volume": 1.0,
     "hotkey": "<shift>+z",
     "quick_phrases": [
@@ -47,15 +47,21 @@
         }
     ],
     "quick_input_position": "bottom-right",
+    "local_output_device_name": "CABLE In 16 Ch (2- VB-Audio Vir",
     "enable_quick_phrases": true,
     "enable_listen_to_self": true,
     "listen_device_name": "Default",
     "listen_volume": 1.0,
     "auto_start_service": true,
     "text_history": [
-        "123"
+        "123",
+        "你好",
+        "321",
+        "Z1",
+        "23",
+        "456"
     ],
     "config_version": "1.0",
-    "show_log_area": false,
-    "pitch": 3
+    "show_log_area": true,
+    "pitch": 0
 }

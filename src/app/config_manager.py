@@ -25,6 +25,7 @@ class ConfigManager:
         "hotkey": "<shift>+z",
         "quick_phrases": [],
         "quick_input_position": "bottom-right",
+        "local_output_device_name": "Default", # 新增此行
         "enable_quick_phrases": True,
         "enable_listen_to_self": False,
         "listen_device_name": "Default",

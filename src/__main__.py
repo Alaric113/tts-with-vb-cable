@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 # 檔案: src/__main__.py
 # 功用: 應用程式的進入點 (當 src 被當作模組執行時)。
-#      - 處理單一實例檢查，防止應用程式重複開啟。
-#      - 處理高 DPI 設定。
-#      - 捕獲全域未處理的例外並記錄到檔案。
+#      - 建立 QApplication 實例。
+#      - 處理單一實例檢查。
+#      - 處理高 DPI 設定與全域例外。
 
 import sys
 import os
-from tkinter import messagebox
+from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtCore import Qt
+
 import traceback
 import subprocess
 import ctypes
@@ -74,12 +76,28 @@ def main():
         try:
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except Exception:
-            pass
+            try:
+                # 備用方法
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+        # PyQt6 的高 DPI 處理
+        try:
+            QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+            # AA_EnableHighDpiScaling 在較新的 PyQt6 版本中已過時或移除
+            if hasattr(Qt.ApplicationAttribute, 'AA_EnableHighDpiScaling'):
+                QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling)
+            QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps)
+        except Exception as e:
+            print(f"設定高 DPI 失敗 (可忽略): {e}")
 
         # --- 修正: 建立一個可重用的 startupinfo 物件來隱藏主控台視窗 ---
         # 這個物件將被傳遞給需要隱藏視窗的 subprocess.Popen 呼叫。
         startupinfo = None
         if is_windows():
+            # 為了 PyQt 的樣式，設定環境變數
+            os.environ["QT_FONT_DPI"] = "96"
+
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startupinfo.wShowWindow = subprocess.SW_HIDE
@@ -91,7 +109,14 @@ def main():
 
     instance_checker = SingleInstance("JuMouth_TTS_Helper_App_Mutex_u123")
     if instance_checker.is_already_running():
-        messagebox.showinfo("提示", "應用程式已經在運行了。")
+        # 建立一個臨時的 QApplication 來顯示訊息框
+        temp_app = QApplication.instance() or QApplication(sys.argv)
+        msg_box = QMessageBox()
+        msg_box.setWindowTitle("提示")
+        msg_box.setText("應用程式已經在運行了。")
+        msg_box.setIcon(QMessageBox.Icon.Information)
+        msg_box.exec()
+
         if pywin32_installed:
             try:
                 hwnd = win32gui.FindWindow(None, "JuMouth - TTS 語音助手")
@@ -101,13 +126,19 @@ def main():
                 print(f"Failed to bring window to front: {e}")
         sys.exit(0)
 
+    # 建立主 QApplication
+    q_app = QApplication(sys.argv)
+
     try:
         # 將 startupinfo 物件傳遞給應用程式實例
         app = LocalTTSPlayer(startupinfo=startupinfo)
-        app.run()
+        app.main_window.show()
+        exit_code = q_app.exec()
+        sys.exit(exit_code)
+
     except Exception:
         error_details = traceback.format_exc()
-        messagebox.showerror("嚴重錯誤", f"應用程式遇到無法處理的錯誤並即將關閉。\n\n錯誤詳情：\n{error_details}")
+        QMessageBox.critical(None, "嚴重錯誤", f"應用程式遇到無法處理的錯誤並即將關閉。\n\n錯誤詳情：\n{error_details}")
         SCRIPT_DIR = os.path.join(os.environ.get('LOCALAPPDATA', '.'), 'JuMouth')
         log_path = os.path.join(SCRIPT_DIR, "error.log")
         with open(log_path, "a", encoding="utf-8") as f:
