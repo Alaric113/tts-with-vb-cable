@@ -4,8 +4,8 @@
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QLabel, QPushButton, QComboBox, QSlider, QFrame, QTextEdit,
-    QSizePolicy, QCheckBox, QTabWidget, QGraphicsDropShadowEffect
+    QLabel, QPushButton, QComboBox, QSlider, QFrame, QTextEdit, QSizePolicy,
+    QCheckBox, QTabWidget, QGraphicsDropShadowEffect, QGraphicsBlurEffect
 )
 from PyQt6.QtCore import Qt, QSize, QPoint
 from PyQt6.QtGui import QFont, QIcon, QColor
@@ -52,11 +52,6 @@ class MainWindow(QMainWindow):
         self.SUB_CARD_OPACITY = 1.0               # 子卡片透明度 (1.0 為不透明)
         self.QUICK_INPUT_BG_COLOR = "30, 30, 30"  # 快速輸入框背景色 (RGB)
         self.QUICK_INPUT_OPACITY = 0.95           # 快速輸入框透明度
-        # -- 彈出視窗樣式 (新增) --
-        self.BG_COLOR_RGB = "247, 249, 252"        # 彈出視窗背景色 (RGB)
-        self.BUTTON_BG_COLOR = "#E9E9EB"          # 彈出視窗按鈕背景
-        self.BUTTON_HOVER_COLOR = "#DCDFE4"       # 彈出視窗按鈕懸停
-        self.SLIDER_GROOVE_COLOR = "#E9E9EB"      # 彈出視窗滑桿軌道
 
         # 應用透明度
         self.setWindowOpacity(self.WINDOW_OPACITY)
@@ -109,12 +104,29 @@ class MainWindow(QMainWindow):
             QPushButton#AccentButton:hover {{
                 background-color: {self.ACCENT_HOVER_COLOR};
             }}
+            QPushButton#AccentButton:disabled {{
+                background-color: #F0F2F5; /* 禁用時的淺灰色 */
+                color: {self.DISABLED_TEXT_COLOR};
+            }}
+            QPushButton#StopButton:disabled {{
+                background-color: #F0F2F5; /* 禁用時的淺灰色 */
+                color: {self.DISABLED_TEXT_COLOR};
+            }}
             QPushButton#StopButton {{
                 background-color: {self.STATUS_RED_COLOR};
                 color: {self.ACCENT_TEXT_COLOR};
             }}
             QPushButton#StopButton:hover {{
                 background-color: #D93025; /* A slightly darker red for hover */
+            }}
+            /* --- 新增: 用於小工具按鈕 (如 +/-) 的樣式 --- */
+            QPushButton#ToolButton {{
+                padding: 0px; /* 覆蓋全域 padding */
+                font-size: 20px;
+                font-weight: normal;
+                background-color: transparent; /* 移除背景色 */
+                border: none; /* 確保沒有邊框 */
+                color: black; /* 設定文字顏色 */
             }}
 
             #TitleBarButton {{
@@ -149,7 +161,7 @@ class MainWindow(QMainWindow):
                 border: none;
                 height: 6px;
                 background: #E9E9EB;
-                margin: 2px 0;
+                margin: 0 0;
                 border-radius: 3px;
             }}
             QSlider::handle:horizontal {{
@@ -201,6 +213,28 @@ class MainWindow(QMainWindow):
             }}
             QTabBar::tab:hover:!selected {{
                 background-color: #DCDFE4;
+            }}
+            /* --- 新增: 統一滾動條樣式 --- */
+            QScrollBar:vertical {{
+                border: none;
+                background: transparent;
+                width: 10px;
+                margin: 0px 0px 0px 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: #DCDFE4;
+                border-radius: 5px;
+                min-height: 20px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: #B0B0B0;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                border: none;
+                background: none;
+            }}
+            QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical {{
+                background: none;
             }}
             /* --- CheckBox --- */
             QCheckBox::indicator {{
@@ -285,6 +319,14 @@ class MainWindow(QMainWindow):
         self.app.voice_combo = self.voice_combo
         self.app.local_device_combo = self.local_device_combo
 
+        # --- 新增: 覆蓋層與模糊效果 ---
+        self.overlay_widget = QWidget(self.main_frame)
+        self.overlay_widget.setObjectName("Overlay")
+        self.overlay_widget.setStyleSheet("#Overlay { background-color: rgba(0, 0, 0, 0.3); }")
+        self.overlay_layout = QVBoxLayout(self.overlay_widget)
+        self.overlay_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.overlay_widget.hide()
+
         # 設置初始大小
         self.resize(720, 610) # 初始為收合狀態
 
@@ -307,6 +349,11 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.app.on_closing()
         event.accept()
+
+    def resizeEvent(self, event):
+        """確保覆蓋層始終與主框架大小相同。"""
+        self.overlay_widget.resize(self.main_frame.size())
+        super().resizeEvent(event)
 
     def _create_title_bar(self):
         self.title_bar = QWidget()
@@ -381,9 +428,9 @@ class MainWindow(QMainWindow):
 
     def _create_main_content_area(self):
         """建立整合後的主內容區域，取代舊的 Tab 視圖。"""
-        content_widget = QWidget()
+        self.content_widget = QWidget() # 將 content_widget 提升為實例屬性
         # 主佈局改為垂直，以容納兩排
-        main_layout = QVBoxLayout(content_widget)
+        main_layout = QVBoxLayout(self.content_widget)
         main_layout.setContentsMargins(0, 15, 0, 15)
         main_layout.setSpacing(15)
 
@@ -424,7 +471,7 @@ class MainWindow(QMainWindow):
         bottom_row_layout.addWidget(self._add_shadow(sliders_card), 0) # 右側佔用最小寬度
         main_layout.addWidget(bottom_row_widget)
 
-        return content_widget
+        return self.content_widget
 
     def _create_output_device_card(self):
         """建立輸出設備設定卡片。"""
@@ -472,43 +519,96 @@ class MainWindow(QMainWindow):
 
         # 語速
         speed_layout = QVBoxLayout()
+        speed_layout.setContentsMargins(0, 0, 0, 0)
+        speed_layout.setSpacing(5) # 減少垂直間距
         speed_layout.addWidget(QLabel("語速"), 0, Qt.AlignmentFlag.AlignCenter)
+        # --- 新增: 微調按鈕 ---
+        speed_plus_btn = QPushButton("+")
+        speed_plus_btn.setFixedSize(24, 24)
+        speed_plus_btn.setObjectName("ToolButton")
+        speed_plus_btn.clicked.connect(lambda: self.speed_slider.setValue(self.speed_slider.value() + 1))
+
         self.speed_slider = QSlider(Qt.Orientation.Vertical)
         self.speed_slider.setRange(100, 250)
         self.speed_slider.setValue(self.app.audio.tts_rate)
         self.speed_slider.valueChanged.connect(self.app.update_tts_settings)
-        # 將滑桿放在中間，讓它垂直伸展
-        speed_layout.addWidget(self.speed_slider, 1, Qt.AlignmentFlag.AlignCenter)
+
+        speed_minus_btn = QPushButton("-")
+        speed_minus_btn.setFixedSize(24, 24)
+        speed_minus_btn.setObjectName("ToolButton")
+        speed_minus_btn.clicked.connect(lambda: self.speed_slider.setValue(self.speed_slider.value() - 1))
+
+        # --- 核心修正: 簡化佈局，並確保所有元件都置中 ---
+        speed_layout.addWidget(speed_plus_btn, 0, Qt.AlignmentFlag.AlignCenter)
+        speed_layout.addWidget(self.speed_slider, 1, Qt.AlignmentFlag.AlignCenter) # stretch=1
+        speed_layout.addWidget(speed_minus_btn, 0, Qt.AlignmentFlag.AlignCenter)
+
         self.speed_value_label = QLabel(str(self.app.audio.tts_rate))
         speed_layout.addWidget(self.speed_value_label, 0, Qt.AlignmentFlag.AlignCenter)
         main_layout.addLayout(speed_layout)
 
         # 音量
         volume_layout = QVBoxLayout()
+        volume_layout.setContentsMargins(0, 0, 0, 0)
+        volume_layout.setSpacing(5) # 減少垂直間距
         volume_layout.addWidget(QLabel("音量"), 0, Qt.AlignmentFlag.AlignCenter)
+        # --- 新增: 微調按鈕 ---
+        vol_plus_btn = QPushButton("+")
+        vol_plus_btn.setFixedSize(24, 24)
+        vol_plus_btn.setObjectName("ToolButton")
+        vol_plus_btn.clicked.connect(lambda: self.volume_slider.setValue(self.volume_slider.value() + 1))
+
         self.volume_slider = QSlider(Qt.Orientation.Vertical)
         self.volume_slider.setRange(50, 100) # 0.5 to 1.0
         self.volume_slider.setValue(int(self.app.audio.tts_volume * 100))
         self.volume_slider.valueChanged.connect(self.app.update_tts_settings)
-        volume_layout.addWidget(self.volume_slider, 1, Qt.AlignmentFlag.AlignCenter)
+
+        vol_minus_btn = QPushButton("-")
+        vol_minus_btn.setFixedSize(24, 24)
+        vol_minus_btn.setObjectName("ToolButton")
+        vol_minus_btn.clicked.connect(lambda: self.volume_slider.setValue(self.volume_slider.value() - 1))
+
+        # --- 核心修正: 簡化佈局，並確保所有元件都置中 ---
+        volume_layout.addWidget(vol_plus_btn, 0, Qt.AlignmentFlag.AlignCenter)
+        volume_layout.addWidget(self.volume_slider, 1, Qt.AlignmentFlag.AlignCenter) # stretch=1
+        volume_layout.addWidget(vol_minus_btn, 0, Qt.AlignmentFlag.AlignCenter)
+
         self.volume_value_label = QLabel(f"{self.app.audio.tts_volume:.2f}")
         volume_layout.addWidget(self.volume_value_label, 0, Qt.AlignmentFlag.AlignCenter)
         main_layout.addLayout(volume_layout)
 
         # 音高
         pitch_layout = QVBoxLayout()
+        pitch_layout.setContentsMargins(0, 0, 0, 0)
+        pitch_layout.setSpacing(5) # 減少垂直間距
         pitch_layout.addWidget(QLabel("音高"), 0, Qt.AlignmentFlag.AlignCenter)
+        # --- 新增: 微調按鈕 ---
+        pitch_plus_btn = QPushButton("+")
+        pitch_plus_btn.setFixedSize(24, 24)
+        pitch_plus_btn.setObjectName("ToolButton")
+        pitch_plus_btn.clicked.connect(lambda: self.pitch_slider.setValue(self.pitch_slider.value() + 1))
+
         self.pitch_slider = QSlider(Qt.Orientation.Vertical)
         self.pitch_slider.setRange(-100, 100)
         self.pitch_slider.setValue(self.app.audio.tts_pitch)
         self.pitch_slider.valueChanged.connect(self.app.update_tts_settings)
-        pitch_layout.addWidget(self.pitch_slider, 1, Qt.AlignmentFlag.AlignCenter)
+
+        pitch_minus_btn = QPushButton("-")
+        pitch_minus_btn.setFixedSize(24, 24)
+        pitch_minus_btn.setObjectName("ToolButton")
+        pitch_minus_btn.clicked.connect(lambda: self.pitch_slider.setValue(self.pitch_slider.value() - 1))
+
+        # --- 核心修正: 簡化佈局，並確保所有元件都置中 ---
+        pitch_layout.addWidget(pitch_plus_btn, 0, Qt.AlignmentFlag.AlignCenter)
+        pitch_layout.addWidget(self.pitch_slider, 1, Qt.AlignmentFlag.AlignCenter) # stretch=1
+        pitch_layout.addWidget(pitch_minus_btn, 0, Qt.AlignmentFlag.AlignCenter)
+
         self.pitch_value_label = QLabel(str(self.app.audio.tts_pitch))
         pitch_layout.addWidget(self.pitch_value_label, 0, Qt.AlignmentFlag.AlignCenter)
         main_layout.addLayout(pitch_layout)
 
         # 讓滑桿卡片有最小高度，以容納垂直滑桿
-        tts_params_frame.setMinimumHeight(200)
+        tts_params_frame.setMinimumHeight(250) # 增加高度以容納按鈕
 
         return tts_params_frame
 
@@ -545,23 +645,31 @@ class MainWindow(QMainWindow):
         """建立包含快捷語音開關和功能按鈕的卡片。"""
         actions_card = QFrame()
         actions_card.setObjectName("BubbleCard")
-        actions_layout = QHBoxLayout(self._add_shadow(actions_card))
-        actions_layout.setContentsMargins(15, 10, 15, 10)
+        # --- 核心修正: 改用網格佈局以分行顯示 ---
+        actions_layout = QGridLayout(self._add_shadow(actions_card))
+        actions_layout.setContentsMargins(15, 15, 15, 15)
+        actions_layout.setHorizontalSpacing(10)
+        actions_layout.setVerticalSpacing(15)
 
         # 快捷語音開關
-        actions_layout.addWidget(QLabel("啟用快捷語音功能:"))
+        actions_layout.addWidget(QLabel("啟用快捷語音功能:"), 0, 0)
         self.quick_phrase_switch = QCheckBox("")
         self.quick_phrase_switch.toggled.connect(self.app._on_toggle_quick_phrases)
-        actions_layout.addWidget(self.quick_phrase_switch)
-        actions_layout.addStretch(1)
+        actions_layout.addWidget(self.quick_phrase_switch, 0, 1)
+        actions_layout.setColumnStretch(2, 1) # 讓右側有彈性空間
 
+        # 功能按鈕 (第二行)
         self.quick_phrase_button = QPushButton("快捷語音設定")
         self.quick_phrase_button.clicked.connect(self.app._open_quick_phrases_window)
-        actions_layout.addWidget(self.quick_phrase_button)
+        actions_layout.addWidget(self.quick_phrase_button, 1, 0)
+
+        self.voice_settings_button = QPushButton("語音聲線設定")
+        self.voice_settings_button.clicked.connect(self.app._open_voice_selection_window)
+        actions_layout.addWidget(self.voice_settings_button, 1, 1)
 
         self.settings_button = QPushButton("其它設定")
         self.settings_button.clicked.connect(self.app._open_settings_window)
-        actions_layout.addWidget(self.settings_button)
+        actions_layout.addWidget(self.settings_button, 1, 2)
 
         return actions_card
 
@@ -584,6 +692,9 @@ class MainWindow(QMainWindow):
 
         self.log_toggle_button = QPushButton("▼")
         self.log_toggle_button.setFixedSize(30, 30)
+        self.log_toggle_button.setObjectName("ToolButton")
+        # --- 核心修正: 設定一個能顯示符號的字體 ---
+        self.log_toggle_button.setFont(QFont("Arial", 12))
         self.log_toggle_button.clicked.connect(self.app.toggle_log_area)
         header_layout.addWidget(self.log_toggle_button)
         layout.addWidget(self._add_shadow(header_card))
@@ -596,3 +707,27 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.log_text)
 
         return log_widget
+
+    def show_overlay(self, widget_to_show):
+        """顯示覆蓋層並模糊背景。"""
+        # 將要顯示的 widget 加入覆蓋層的佈局
+        self.overlay_layout.addWidget(widget_to_show)
+
+        # 應用模糊效果
+        blur_effect = QGraphicsBlurEffect()
+        blur_effect.setBlurRadius(15)
+        self.content_widget.setGraphicsEffect(blur_effect)
+
+        self.overlay_widget.show()
+
+    def hide_overlay(self):
+        """隱藏覆蓋層並移除模糊效果。"""
+        # 移除模糊效果
+        self.content_widget.setGraphicsEffect(None)
+
+        # 從佈局中移除 widget 並刪除它
+        if self.overlay_layout.count() > 0:
+            widget_to_remove = self.overlay_layout.takeAt(0).widget()
+            if widget_to_remove:
+                widget_to_remove.deleteLater()
+        self.overlay_widget.hide()

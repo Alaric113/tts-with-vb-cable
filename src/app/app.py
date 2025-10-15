@@ -286,22 +286,42 @@ class LocalTTSPlayer(QObject):
             callback=on_user_choice)
 
     def _update_ui_after_load(self):
-        self.main_window.engine_combo.setCurrentText(self.audio.current_engine)
-        self.main_window.speed_slider.setValue(self.audio.tts_rate)
-        self.main_window.volume_slider.setValue(int(self.audio.tts_volume * 100)) # 假設 slider 範圍是 0-100
-        self.main_window.pitch_slider.setValue(self.audio.tts_pitch)
-        # voices
-        if self.audio.current_engine == ENGINE_EDGE:
-            values = self.audio.get_voice_names()
-            self.main_window.voice_combo.clear()
-            self.main_window.voice_combo.addItems(values)
-            self.main_window.voice_combo.setCurrentText(self.audio.edge_voice if self.audio.edge_voice in values else DEFAULT_EDGE_VOICE)
-        else:
-            names = self.audio.get_voice_names()
-            self.main_window.voice_combo.clear()
-            self.main_window.voice_combo.addItems(names)
-            loaded_name = self.config.get("voice")
-            self.main_window.voice_combo.setCurrentText(loaded_name if loaded_name in names else (names[0] if names else "default"))
+        # --- 核心重構: 根據 visible_voices 重新建立下拉選單 ---
+        self._ui_loading = True # 防止觸發 change 事件
+
+        current_engine = self.config.get("engine")
+        self.main_window.engine_combo.setCurrentText(current_engine)
+
+        # 建立完整的聲線字典 { "顯示名稱": 資料物件 }
+        self.all_voices_map = {}
+        if current_engine == ENGINE_EDGE:
+            for v in self.audio.get_all_edge_voices():
+                self.all_voices_map[v["ShortName"]] = v
+            for v in self.config.get("custom_voices", []):
+                self.all_voices_map[v["name"]] = v
+        else: # pyttsx3
+            for v in self.audio.get_voice_names():
+                self.all_voices_map[v] = {"name": v, "engine": ENGINE_PYTTX3}
+
+        # 根據 visible_voices 篩選要顯示的項目
+        visible_voices_config = self.config.get("visible_voices", [])
+        visible_voices = [name for name in visible_voices_config if name in self.all_voices_map]
+        
+        # 如果可見列表為空，則加入預設的
+        if not visible_voices and self.all_voices_map:
+            default_voice_name = list(self.all_voices_map.keys())[0]
+            visible_voices.append(default_voice_name)
+
+        self.main_window.voice_combo.clear()
+        self.main_window.voice_combo.addItems(visible_voices)
+
+        # 設定當前選項
+        current_selection = self.config.get("voice")
+        if current_selection in visible_voices:
+            self.main_window.voice_combo.setCurrentText(current_selection)
+        elif visible_voices:
+            self.main_window.voice_combo.setCurrentText(visible_voices[0])
+
         self.main_window.voice_combo.setEnabled(True)
         # devices
         devnames = self.audio.get_output_device_names()
@@ -322,6 +342,9 @@ class LocalTTSPlayer(QObject):
             for msg in self._early_log_queue:
                 self.main_window.log_text.append(msg)
             self._early_log_queue.clear()
+        
+        # --- 核心修正: UI 載入完成，允許事件觸發 ---
+        self._ui_loading = False
 
     def _process_audio_status_queue(self):
         """從音訊執行緒的佇列中讀取狀態並更新 UI。"""
@@ -387,16 +410,34 @@ class LocalTTSPlayer(QObject):
                     text = phrase.get("text")
                     if hk and text:
                         import functools
-                        hotkeys[hk] = functools.partial(self._play_quick_phrase, text)
+                        hotkeys[hk] = functools.partial(self._play_quick_phrase, text, phrase_info=phrase)
             self.hotkey_listener = keyboard.GlobalHotKeys(hotkeys)
             self.hotkey_listener.start()
             self.log_message(f"服務已啟動，監聽 {len(hotkeys)} 個快捷鍵。" )
         except Exception as e:
-            self.log_message(f"快捷鍵啟動失敗: {e}。請檢查格式。", "ERROR")
+            self.log_message(f"快捷鍵啟動失敗: {e}。請檢查格式或重啟應用。", "ERROR")
 
-    def _play_quick_phrase(self, text):
+    def _play_quick_phrase(self, text, phrase_info=None):
         if not self.is_running:
             return
+
+        # --- 快取播放邏輯 ---
+        if phrase_info:
+            # 根據當前設定產生預期的快取路徑
+            cache_path = self.audio._get_cache_path(
+                phrase_info.get("text"),
+                self.audio.current_engine,
+                self.audio.edge_voice if self.audio.current_engine == self.ENGINE_EDGE else self.audio.pyttsx3_voice_id,
+                self.audio.tts_rate,
+                self.audio.tts_pitch
+            )
+            if os.path.exists(cache_path):
+                # --- 核心修正: 將快取路徑和原始文字一起傳遞 ---
+                # 讓音訊引擎知道這是一個快取播放，並能顯示正確的文字
+                self.audio.play_text((cache_path, text))
+                return
+
+        # 如果快取不存在，則退回即時合成
         self.audio.play_text(text)
 
     # ===================== 快捷鍵編輯 =====================
@@ -610,25 +651,29 @@ class LocalTTSPlayer(QObject):
 
     # ===================== 設定視窗 & 快捷語音 =====================
     def _open_settings_window(self):
-        if self.settings_window and self.settings_window.isVisible():
-            self.settings_window.activateWindow()
-            self.settings_window.raise_()
-            return
-        self.settings_window = SettingsWindow(self.main_window, self)
-        self.settings_window.show()
+        # 檢查覆蓋層是否已經有內容
+        if self.main_window.overlay_layout.count() > 0:
+            return # 如果已經有東西，就不再開啟
+        settings_widget = SettingsWindow(self.main_window, self)
+        self.main_window.show_overlay(settings_widget)
 
     def _open_quick_phrases_window(self):
-        if self.quick_phrases_window and self.quick_phrases_window.isVisible():
-            self.quick_phrases_window.activateWindow()
-            self.quick_phrases_window.raise_()
-            return
+        if self.main_window.overlay_layout.count() > 0:
+            return # 如果已經有東西，就不再開啟
 
         while len(self.quick_phrases) < 10:
             self.quick_phrases.append({"text": "", "hotkey": ""})
         self.quick_phrases = self.quick_phrases[:10]
 
-        self.quick_phrases_window = QuickPhrasesWindow(self.main_window, self)
-        self.quick_phrases_window.show()
+        phrases_widget = QuickPhrasesWindow(self.main_window, self)
+        self.main_window.show_overlay(phrases_widget)
+
+    def _open_voice_selection_window(self):
+        if self.main_window.overlay_layout.count() > 0:
+            return
+        from ..ui.popups import VoiceSelectionWindow
+        voice_widget = VoiceSelectionWindow(self.main_window, self)
+        self.main_window.show_overlay(voice_widget)
 
     def _on_toggle_quick_phrases(self):
         """當主視窗的快捷語音開關被切換時呼叫。"""
@@ -682,14 +727,30 @@ class LocalTTSPlayer(QObject):
     def _on_voice_change(self, choice):
         if not choice or self._ui_loading: # 如果正在載入或選項為空，則不執行
             return
+        
+        # --- 核心重構: 處理自訂語音 ---
+        voice_data = self.all_voices_map.get(choice)
+        if not voice_data:
+            self.log_message(f"錯誤：找不到名為 '{choice}' 的語音資料。", "ERROR")
+            return
 
-        if self.audio.current_engine == ENGINE_EDGE:
-            self.audio.set_edge_voice(choice)
+        # 判斷是否為自訂語音
+        if voice_data.get("engine") == ENGINE_EDGE and "base_voice" in voice_data:
+            # 是自訂語音，套用其設定
+            self.audio.set_edge_voice(voice_data["base_voice"])
+            self.main_window.speed_slider.setValue(voice_data["rate"])
+            self.main_window.pitch_slider.setValue(voice_data["pitch"])
+            # update_tts_settings 會自動更新 audio engine 和 config
+            self.update_tts_settings()
         else:
-            self.audio.set_pyttsx3_voice_by_name(choice)
-        self.log_message(f"試聽語音: {choice}", "DEBUG")
-        self.audio.preview_text("你好，這是一段測試語音。") # 試聽
+            # 是原始語音
+            if self.audio.current_engine == ENGINE_EDGE:
+                self.audio.set_edge_voice(voice_data["ShortName"])
+            else:
+                self.audio.set_pyttsx3_voice_by_name(voice_data["name"])
+        
         self.config.set("voice", choice)
+        self.log_message(f"當前語音已設定為: {choice}")
 
     def _on_local_device_change(self, device_name):
         """當輸出設備變更時呼叫。"""
@@ -719,12 +780,5 @@ class LocalTTSPlayer(QObject):
             try: self.hotkey_listener.stop() 
             except Exception: pass
         
-        self.audio.stop() # 優雅地停止音訊工作執行緒
-
-        if self.quick_input_window:
-            self.quick_input_window.close()
-        if self.settings_window:
-            self.settings_window.close()
-        if self.quick_phrases_window:
-            self.quick_phrases_window.close()
+        self.audio.stop() # 優雅地停止音訊工作執行緒        
         QApplication.instance().quit()

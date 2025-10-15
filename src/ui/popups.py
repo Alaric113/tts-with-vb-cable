@@ -3,74 +3,170 @@
 # 功用: 定義應用程式中使用的各種 PyQt 彈出視窗。
 
 from PyQt6.QtWidgets import (
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
     QLabel, QPushButton, QComboBox, QSlider, QCheckBox, QLineEdit,
-    QFrame, QDialogButtonBox, QMessageBox, QScrollArea, QRadioButton
+    QFrame, QDialogButtonBox, QMessageBox, QScrollArea, QRadioButton, QGraphicsDropShadowEffect
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QIntValidator
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPoint, QSize
+from PyQt6.QtGui import QFont, QIntValidator, QIcon, QColor
 
 from ..utils.deps import APP_VERSION
 
-class BaseDialog(QDialog):
+class BaseDialog(QWidget):
     """所有彈出對話框的基類，提供統一的外觀和行為。"""
     def __init__(self, parent, title, width=500, height=300):
         super().__init__(parent)
-        self.setWindowTitle(title)
-        self.setFixedSize(width, height)
-        self.setModal(False) # 非模態，允許與主視窗互動
+        self.main_window = parent # 明確儲存主視窗的參照
+        self.title = title
+        self.setMinimumSize(width, height)
+        self.setMaximumSize(width, height) # 設定最大尺寸以固定大小
 
-        # --- 修正: 為彈出視窗設定獨立、正確的樣式，不再繼承主視窗樣式 ---
-        # 這可以從根本上解決「白底白字」的問題。
+        # --- 獨立的彈出視窗樣式定義 ---
+        self.TEXT_COLOR = "#333333"
+        self.ACCENT_COLOR = "#007AFF"
+        self.ACCENT_TEXT_COLOR = "#FFFFFF"
+        self.BORDER_COLOR = "#EAEAEA"
+        self.STATUS_ORANGE_COLOR = "#FF9500"
+        self.STATUS_RED_COLOR = "#FF3B30"
+
+        # 顏色 (RGB for alpha)
+        self.BG_COLOR_RGB = "247, 249, 252"
+        self.CARD_BG_COLOR_RGB = "255, 255, 255"
+        self.SUB_CARD_BG_COLOR_RGB = "255, 255, 255" # 根據設計稿，子卡片也是白色
+
+        # 透明度
+        self.CARD_OPACITY = 0.9
+        self.SUB_CARD_OPACITY = 1.0
+
+        # 元件顏色
+        self.BUTTON_BG_COLOR = "#E9E9EB"
+        self.BUTTON_HOVER_COLOR = "#DCDFE4"
+        self.SLIDER_GROOVE_COLOR = "#E9E9EB"
+        self.DISABLED_TEXT_COLOR = "#B0B0B0"
+        self.DISABLED_BG_COLOR = "#F0F2F5"
+        
+        # 新增: 根據設計稿的顏色
+        self.INPUT_BG_COLOR = "#E0E0E0"
+        self.KEY_LABEL_BG_COLOR = "#CCCCCC"
+
+        # --- 樣式表 ---
         self.setStyleSheet(f"""
             QDialog {{
-                background-color: rgb({parent.BG_COLOR_RGB});
-                color: {parent.TEXT_COLOR};
+                background-color: transparent;
+                color: {self.TEXT_COLOR};
             }}
             QLabel, QCheckBox, QRadioButton {{
                 background-color: transparent;
-                color: {parent.TEXT_COLOR};
+                color: {self.TEXT_COLOR};
+            }}
+            QLineEdit {{
+                border: 1px solid {self.BORDER_COLOR};
+                border-radius: 8px;
+                padding: 5px 8px;
+                background-color: {self.INPUT_BG_COLOR};
+                color: #000000; /* 確保輸入框文字為黑色 */
             }}
             QPushButton {{
-                background-color: {parent.BUTTON_BG_COLOR};
-                color: {parent.TEXT_COLOR};
+                background-color: {self.BUTTON_BG_COLOR};
+                color: {self.TEXT_COLOR};
                 border: none;
                 padding: 8px 16px;
                 border-radius: 15px;
                 font-weight: 500;
             }}
             QPushButton:hover {{
-                background-color: {parent.BUTTON_HOVER_COLOR};
+                background-color: {self.BUTTON_HOVER_COLOR};
+            }}
+            QPushButton:disabled {{
+                background-color: {self.DISABLED_BG_COLOR};
+                color: {self.DISABLED_TEXT_COLOR};
             }}
             QComboBox {{
                 padding: 8px;
-                border: 1px solid {parent.BORDER_COLOR};
+                border: 1px solid {self.BORDER_COLOR};
                 border-radius: 15px;
-                background-color: rgba({parent.SUB_CARD_BG_COLOR_RGB}, {parent.SUB_CARD_OPACITY});
-                color: {parent.TEXT_COLOR}; /* 新增: 設定下拉選單的文字顏色 */
+                background-color: rgba({self.SUB_CARD_BG_COLOR_RGB}, {self.SUB_CARD_OPACITY});
+                color: {self.TEXT_COLOR};
             }}
             QSlider::groove:horizontal {{
                 border: none;
                 height: 6px;
-                background: {parent.SLIDER_GROOVE_COLOR};
+                background: {self.SLIDER_GROOVE_COLOR};
                 margin: 2px 0;
                 border-radius: 3px;
             }}
             QSlider::handle:horizontal {{
-                background: rgba({parent.CARD_BG_COLOR_RGB}, {parent.CARD_OPACITY});
-                border: 2px solid {parent.ACCENT_COLOR};
+                background: rgba({self.CARD_BG_COLOR_RGB}, {self.CARD_OPACITY});
+                border: 2px solid {self.ACCENT_COLOR};
                 width: 16px;
                 margin: -7px 0;
                 border-radius: 10px;
             }}
             QFrame#SubCard {{
-                background-color: rgba({parent.SUB_CARD_BG_COLOR_RGB}, {parent.SUB_CARD_OPACITY});
+                background-color: rgba({self.SUB_CARD_BG_COLOR_RGB}, 0.7);
                 border-radius: 18px;
             }}
             QFrame#Card {{
-                background-color: rgba({parent.CARD_BG_COLOR_RGB}, {parent.CARD_OPACITY});
+                background-color: rgba({self.CARD_BG_COLOR_RGB}, {self.CARD_OPACITY});
                 border-radius: 18px;
-                border: 1px solid {parent.BORDER_COLOR};
+                border: 1px solid {self.BORDER_COLOR};
+            }}
+            /* --- 新增: 快捷語音項目卡片樣式 --- */
+            QFrame#PhraseItemCard {{
+                background-color: rgba(255, 255, 255, 0.7);
+                border-radius: 12px;
+            }}
+            /* --- 新增: 快捷語音底部控制列樣式 --- */
+            QFrame#ControlBar {{
+                background-color: #E9E9EB; /* 使用與按鈕和下拉選單相同的背景色 */
+                border-top: 1px solid #DCDFE4; /* 頂部加上分隔線 */
+                border-bottom-left-radius: 12px; /* 圓角與父容器對齊 */
+                border-bottom-right-radius: 12px;
+            }}
+            /* --- 新增: 統一滾動條樣式 --- */
+            QScrollBar:vertical {{
+                border: none;
+                background: transparent;
+                width: 10px;
+                margin: 0px 0px 0px 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: #DCDFE4;
+                border-radius: 5px;
+                min-height: 20px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: #B0B0B0;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                border: none;
+                background: none;
+            }}
+            QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical {{
+                background: none;
+            }}
+
+            QLabel#KeyLabel {{
+                padding: 4px 10px;
+                background-color: {self.KEY_LABEL_BG_COLOR};
+                border-radius: 8px;
+                font-weight: 500;
+                color: #000000;
+            }}
+            QPushButton#DeleteButton {{
+                background-color: transparent;
+                color: {self.STATUS_RED_COLOR};
+                font-size: 18px;
+                font-weight: bold;
+                border-radius: 14px;
+                padding: 0;
+                margin: 0;
+                min-width: 28px;
+                max-width: 28px;
+            }}
+            QPushButton#DeleteButton:hover {{
+                background-color: {self.STATUS_RED_COLOR};
+                color: white;
             }}
             /* --- CheckBox --- */
             QCheckBox::indicator {{
@@ -82,7 +178,7 @@ class BaseDialog(QDialog):
                 background-color: #DCDFE4;
             }}
             QCheckBox::indicator:checked {{
-                background-color: {parent.ACCENT_COLOR};
+                background-color: {self.ACCENT_COLOR};
             }}
             QCheckBox::handle {{
                 /* This is the white ball */
@@ -103,11 +199,65 @@ class BaseDialog(QDialog):
             QCheckBox {{
                 spacing: 10px; /* 文字與指示器之間的間距 */
             }}
+            /* --- Custom Title Bar --- */
+            #TitleBarButton {{
+                background-color: transparent;
+                border-radius: 7px;
+                padding: 0;
+                margin: 0;
+                font-size: 16px;
+                color: #888888;
+            }}
+            #TitleBarButton:hover {{
+                color: #333333;
+            }}
+            #CloseButton:hover {{ background-color: {self.STATUS_RED_COLOR}; color: white; }}
         """)
 
-        self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(15, 15, 15, 15)
+        # --- 新的佈局結構 ---
+        # 1. 容器 widget 作為 central widget
+        container_widget = QWidget()
+        central_layout = QVBoxLayout(container_widget)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        self.setLayout(central_layout)
+
+        # 2. 內容框架，具有背景色和圓角
+        self.content_frame = QFrame()
+        self.content_frame.setStyleSheet(f"background-color: rgb({self.BG_COLOR_RGB}); border-radius: 12px;")
+        central_layout.addWidget(self.content_frame)
+
+        # 3. 內容框架內的佈局
+        frame_layout = QVBoxLayout(self.content_frame)
+        frame_layout.setContentsMargins(0, 0, 0, 0)
+        frame_layout.setSpacing(0)
+
+        # 4. 加入自訂標題列和主內容區域
+        frame_layout.addWidget(self._create_title_bar())
+        self.main_layout = QVBoxLayout() # 這是給子類別放內容的地方
+        self.main_layout.setContentsMargins(15, 10, 15, 15)
         self.main_layout.setSpacing(15)
+        frame_layout.addLayout(self.main_layout)
+
+    def _create_title_bar(self):
+        self.title_bar = QWidget()
+        self.title_bar.setFixedHeight(35)
+        self.title_bar.setStyleSheet("background: transparent;") # 確保標題列透明
+        layout = QHBoxLayout(self.title_bar)
+        layout.setContentsMargins(15, 0, 5, 0)
+        title_label = QLabel(self.title)
+        title_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #666666;")
+        layout.addWidget(title_label)
+        layout.addStretch()
+        close_button = QPushButton("✕")
+        close_button.setObjectName("TitleBarButton")
+        close_button.setProperty("class", "CloseButton") # 用於區分懸停樣式
+        close_button.setFixedSize(28, 28)
+        # --- 核心修改: 點擊關閉按鈕時，呼叫主視窗的 hide_overlay 方法 ---
+        # 我們假設 parent 是 MainWindow
+        if hasattr(self.main_window, 'hide_overlay'):
+            close_button.clicked.connect(self.main_window.hide_overlay)
+        layout.addWidget(close_button)
+        return self.title_bar
 
     def _create_card(self, title=""):
         card = QFrame()
@@ -122,6 +272,14 @@ class BaseDialog(QDialog):
             card_layout.addWidget(title_label)
 
         return card, card_layout
+
+    def _add_shadow(self, widget):
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(15)
+        shadow.setColor(QColor(0, 0, 0, 30))
+        shadow.setOffset(0, 2)
+        widget.setGraphicsEffect(shadow)
+        return widget
 
 class SettingsWindow(BaseDialog):
     def __init__(self, parent, app_controller):
@@ -233,78 +391,424 @@ class SettingsWindow(BaseDialog):
         self.listen_volume_label.setText(f"{value}%")
         self.app.config.set("listen_volume", self.audio.listen_volume)
 
-class QuickPhrasesWindow(BaseDialog):
-    def __init__(self, parent, app_controller):
-        super().__init__(parent, "快捷語音設定", 600, 550)
+class AddCustomVoiceDialog(QDialog):
+    """一個用於新增或編輯自訂語音的小對話框。"""
+    def __init__(self, parent, app_controller, existing_voice=None):
+        super().__init__(parent)
         self.app = app_controller
-        self.ui_elements = []
+        self.audio = app_controller.audio
+        self.existing_voice = existing_voice
+
+        self.setWindowTitle("新增自訂語音" if not existing_voice else "編輯自訂語音")
+        self.setModal(True)
+        self.setMinimumWidth(400)
+
+        layout = QFormLayout(self)
+        layout.setSpacing(15)
+
+        self.name_input = QLineEdit(existing_voice["name"] if existing_voice else "")
+        self.name_input.setPlaceholderText("例如：溫柔女聲、機器人")
+        layout.addRow("自訂名稱:", self.name_input)
+
+        self.base_voice_combo = QComboBox()
+        all_edge_voices = self.audio.get_all_edge_voices()
+        self.base_voice_combo.addItems([v["ShortName"] for v in all_edge_voices])
+        if existing_voice:
+            self.base_voice_combo.setCurrentText(existing_voice["base_voice"])
+        layout.addRow("基礎聲線:", self.base_voice_combo)
+
+        # 語速
+        rate_layout = QHBoxLayout()
+        self.rate_slider = QSlider(Qt.Orientation.Horizontal)
+        self.rate_slider.setRange(100, 250)
+        self.rate_slider.setValue(existing_voice["rate"] if existing_voice else 175)
+        self.rate_label = QLabel(str(self.rate_slider.value()))
+        self.rate_slider.valueChanged.connect(lambda v: self.rate_label.setText(str(v)))
+        rate_layout.addWidget(self.rate_slider)
+        rate_layout.addWidget(self.rate_label)
+        layout.addRow("語速:", rate_layout)
+
+        # 音高
+        pitch_layout = QHBoxLayout()
+        self.pitch_slider = QSlider(Qt.Orientation.Horizontal)
+        self.pitch_slider.setRange(-100, 100)
+        self.pitch_slider.setValue(existing_voice["pitch"] if existing_voice else 0)
+        self.pitch_label = QLabel(str(self.pitch_slider.value()))
+        self.pitch_slider.valueChanged.connect(lambda v: self.pitch_label.setText(str(v)))
+        pitch_layout.addWidget(self.pitch_slider)
+        pitch_layout.addWidget(self.pitch_label)
+        layout.addRow("音高:", pitch_layout)
+
+        # 按鈕
+        button_box = QDialogButtonBox()
+        preview_button = button_box.addButton("試聽", QDialogButtonBox.ButtonRole.ActionRole)
+        preview_button.clicked.connect(self._preview)
+        save_button = button_box.addButton("儲存", QDialogButtonBox.ButtonRole.AcceptRole)
+        cancel_button = button_box.addButton("取消", QDialogButtonBox.ButtonRole.RejectRole)
+        save_button.clicked.connect(self.accept)
+        cancel_button.clicked.connect(self.reject)
+        layout.addRow(button_box)
+
+    def _preview(self):
+        self.audio.preview_text(
+            "你好，這是自訂語音試聽。",
+            override_voice=self.base_voice_combo.currentText(),
+            override_rate=self.rate_slider.value(),
+            override_pitch=self.pitch_slider.value()
+        )
+
+    def get_voice_data(self):
+        name = self.name_input.text().strip()
+        if not name:
+            QMessageBox.warning(self, "錯誤", "自訂名稱不可為空。")
+            return None
+        return {
+            "name": name,
+            "base_voice": self.base_voice_combo.currentText(),
+            "rate": self.rate_slider.value(),
+            "pitch": self.pitch_slider.value(),
+            "engine": self.app.ENGINE_EDGE # 目前只支援 Edge
+        }
+
+class VoiceSelectionWindow(BaseDialog):
+    def __init__(self, parent, app_controller):
+        super().__init__(parent, "Edge-TTS 語音聲線設定", 600, 550)
+        self.app = app_controller
+        self.audio = app_controller.audio
+        # 複製一份設定進行編輯
+        self.custom_voices_buffer = [v.copy() for v in self.app.config.get("custom_voices", [])]
+        self.visible_voices_buffer = set(self.app.config.get("visible_voices", []))
+        self.all_edge_voices = self.audio.get_all_edge_voices()
+        self.ui_elements = {} # { "voice_name": {"checkbox": QCheckBox} }
         self._build_ui()
 
     def _build_ui(self):
+        # --- 說明文字 ---
+        info_label = QLabel("勾選聲線以在主視窗的下拉選單中顯示。")
+        info_label.setStyleSheet("color: #666; font-size: 12px;")
+        self.main_layout.addWidget(info_label)
+
+        # --- 捲動列表 ---
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setObjectName("Card")
+        scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        scroll_content = QWidget()
+        self.scroll_layout = QVBoxLayout(scroll_content)
+        self.scroll_layout.setContentsMargins(0, 0, 0, 0)
+        self.scroll_layout.setSpacing(10)
+
+        # -- 自訂語音區 --
+        custom_card, self.custom_layout = self._create_card("我的自訂語音")
+        add_button = QPushButton("＋ 新增")
+        add_button.clicked.connect(self._add_custom_voice)
+        self.custom_layout.addWidget(add_button, 0, Qt.AlignmentFlag.AlignRight)
+        self.scroll_layout.addWidget(custom_card)
+
+        # -- 原始語音區 --
+        original_card, self.original_layout = self._create_card("Edge-TTS 原始中文聲線")
+        self.scroll_layout.addWidget(original_card)
+        
+        self.scroll_layout.addStretch(1)
+        scroll_area.setWidget(scroll_content)
+        self.main_layout.addWidget(scroll_area, 1)
+
+        self._redraw_lists()
+
+        # --- 底部控制區 ---
+        control_frame = QFrame()
+        control_frame.setObjectName("ControlBar")
+        control_layout = QHBoxLayout(control_frame)
+        control_layout.addStretch(1)
+
+        save_button = QPushButton("套用並關閉")
+        save_button.clicked.connect(self._save_and_close)
+        control_layout.addWidget(save_button)
+        self.main_layout.addWidget(control_frame)
+
+    def _redraw_lists(self):
+        # 清空
+        for layout in [self.custom_layout, self.original_layout]:
+            # 從 1 開始以跳過標題
+            while layout.count() > 1:
+                item = layout.takeAt(1)
+                if item and item.widget():
+                    item.widget().deleteLater()
+        self.ui_elements.clear()
+
+        # 重建自訂語音列表
+        for index, voice_data in enumerate(self.custom_voices_buffer):
+            self._create_voice_item_widget(voice_data, self.custom_layout, is_custom=True, index=index)
+
+        # 重建原始語音列表
+        for voice_data in self.all_edge_voices:
+            self._create_voice_item_widget(voice_data, self.original_layout)
+
+    def _create_voice_item_widget(self, voice_data, target_layout, is_custom=False, index=None):
+        card = QFrame()
+        card.setObjectName("PhraseItemCard")
+        layout = QHBoxLayout(self._add_shadow(card))
+        layout.setSpacing(15)
+
+        voice_name = voice_data["name"] if is_custom else voice_data["ShortName"]
+        
+        checkbox = QCheckBox(voice_name)
+        checkbox.setChecked(voice_name in self.visible_voices_buffer)
+        checkbox.toggled.connect(lambda checked, name=voice_name: self._on_visibility_changed(checked, name))
+        layout.addWidget(checkbox, 2)
+        self.ui_elements[voice_name] = {"checkbox": checkbox}
+
+        base_voice_name = voice_data["base_voice"] if is_custom else voice_data["ShortName"]
+        base_voice_data = next((v for v in self.all_edge_voices if v["ShortName"] == base_voice_name), None)
+        gender = "男" if base_voice_data and base_voice_data.get("Gender") == "Male" else "女"
+        gender_label = QLabel(f"({gender})")
+        gender_label.setFixedWidth(60)
+        layout.addWidget(gender_label)
+
+        if is_custom:
+            params_text = f"速率: {voice_data['rate']}, 音高: {voice_data['pitch']}"
+            params_label = QLabel(params_text)
+            params_label.setStyleSheet("color: #666;")
+            layout.addWidget(params_label, 1)
+
+        layout.addStretch(1)
+
+        if is_custom:
+            edit_button = QPushButton("編輯")
+            edit_button.clicked.connect(lambda _, i=index: self._edit_custom_voice(i))
+            layout.addWidget(edit_button)
+            delete_button = QPushButton("刪除")
+            delete_button.clicked.connect(lambda _, i=index: self._delete_custom_voice(i))
+            layout.addWidget(delete_button)
+
+        preview_button = QPushButton("試聽")
+        preview_button.setFixedWidth(80)
+        preview_button.clicked.connect(lambda _, v=voice_data, c=is_custom: self._preview_voice(v, c))
+        layout.addWidget(preview_button)
+
+        target_layout.addWidget(card)
+
+    def _on_visibility_changed(self, checked, voice_name):
+        if checked:
+            self.visible_voices_buffer.add(voice_name)
+        else:
+            self.visible_voices_buffer.discard(voice_name)
+
+    def _preview_voice(self, voice_data, is_custom):
+        if is_custom:
+            self.audio.preview_text("你好", 
+                override_voice=voice_data["base_voice"],
+                override_rate=voice_data["rate"],
+                override_pitch=voice_data["pitch"])
+        else:
+            self.audio.preview_text("你好", override_voice=voice_data["ShortName"])
+
+    def _add_custom_voice(self):
+        dialog = AddCustomVoiceDialog(self, self.app)
+        if dialog.exec():
+            new_voice_data = dialog.get_voice_data()
+            if new_voice_data:
+                self.custom_voices_buffer.append(new_voice_data)
+                self.visible_voices_buffer.add(new_voice_data["name"]) # 新增的預設為可見
+                self._redraw_lists()
+
+    def _edit_custom_voice(self, index):
+        voice_to_edit = self.custom_voices_buffer[index]
+        dialog = AddCustomVoiceDialog(self, self.app, existing_voice=voice_to_edit)
+        if dialog.exec():
+            updated_voice_data = dialog.get_voice_data()
+            if updated_voice_data:
+                self.custom_voices_buffer[index] = updated_voice_data
+                self._redraw_lists()
+
+    def _delete_custom_voice(self, index):
+        voice_to_delete = self.custom_voices_buffer[index]
+        self.visible_voices_buffer.discard(voice_to_delete["name"])
+        del self.custom_voices_buffer[index]
+        self._redraw_lists()
+
+    def _save_and_close(self):
+        self.app.config.set("custom_voices", self.custom_voices_buffer)
+        self.app.config.set("visible_voices", list(self.visible_voices_buffer))
+        self.app.log_message("語音聲線設定已儲存。")
+        # 觸發主視窗 UI 更新
+        self.app._update_ui_after_load()
+        self.main_window.hide_overlay()
+
+class QuickPhrasesWindow(BaseDialog):
+    # 新增: 用於跨執行緒安全更新 UI 的信號
+    # 參數: (int: 項目索引, str: 新的快捷鍵, str: 衝突訊息)
+    hotkey_recorded_signal = pyqtSignal(int, str, str)
+
+    def __init__(self, parent, app_controller):
+        super().__init__(parent, "快捷語音設定", 600, 550)
+        self.setObjectName("QuickPhrasesWindow")
+        self.app = app_controller
+        self.ui_elements = []
+        # 複製一份設定進行編輯，點擊儲存時才寫回
+        self.phrases_buffer = [p.copy() for p in self.app.quick_phrases]
+        self._hotkey_listener = None # 新增: 用於追蹤 pynput 監聽器
+        self.hotkey_recorded_signal.connect(self._on_hotkey_recorded)
+        self._build_ui()
+
+    def _build_ui(self):
+        # --- 核心內容區: 捲動列表 ---
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setObjectName("Card") # 套用白色圓角卡片樣式
         scroll_area.setStyleSheet("#Card { border: none; }")
 
-        content_widget = QWidget()
-        content_layout = QVBoxLayout(content_widget)
-        content_layout.setSpacing(10)
+        self.scroll_content = QWidget()
+        self.scroll_layout = QVBoxLayout(self.scroll_content)
+        self.scroll_layout.setContentsMargins(10, 10, 10, 10)
+        self.scroll_layout.setSpacing(10)
+        self.scroll_layout.addStretch(1)
+        scroll_area.setWidget(self.scroll_content)
 
-        for index in range(10):
-            phrase = self.app.quick_phrases[index]
-            item_frame = QFrame()
-            item_frame.setObjectName("SubCard")
-            item_layout = QHBoxLayout(item_frame)
-            item_frame.setStyleSheet(f"#SubCard {{ background-color: rgba({self.parent().SUB_CARD_BG_COLOR_RGB}, {self.parent().SUB_CARD_OPACITY}); border-radius: 18px; }}")
+        self._redraw_phrase_list()
+        self.main_layout.addWidget(scroll_area, 1) # 佔用主要空間
 
-            entry = QLineEdit(phrase.get("text", ""))
-            entry.setPlaceholderText(f"快捷語音 {index + 1}...")
-            entry.setStyleSheet("border: none; background: transparent;")
-            entry.editingFinished.connect(lambda i=index: self._update_phrase_text(i))
-            item_layout.addWidget(entry)
+        # --- 底部控制區 ---
+        control_frame = QFrame() # 移除 Card，使用新的 ControlBar 樣式
+        control_frame.setObjectName("ControlBar")
+        control_layout = QHBoxLayout(control_frame)
 
-            hotkey_btn = QPushButton(phrase.get("hotkey", "設定快捷鍵"))
-            hotkey_btn.setFixedWidth(120)
-            hotkey_btn.setCheckable(True)
-            hotkey_btn.toggled.connect(lambda checked, i=index: self._record_quick_phrase_hotkey(i, checked))
-            item_layout.addWidget(hotkey_btn)
+        add_button = QPushButton("＋ 新增快捷語音")
+        add_button.clicked.connect(self._add_phrase_item)
+        control_layout.addWidget(add_button)
+        control_layout.addStretch(1)
 
-            content_layout.addWidget(item_frame)
-            self.ui_elements.append({"entry": entry, "button": hotkey_btn})
+        save_button = QPushButton("儲存並關閉")
+        save_button.clicked.connect(self._save_and_close)
+        control_layout.addWidget(save_button)
 
-        content_layout.addStretch(1)
-        scroll_area.setWidget(content_widget)
-        self.main_layout.addWidget(scroll_area)
+        self.main_layout.addWidget(control_frame)
+
+    def _create_title_bar(self):
+        """覆寫基底類別的方法，以移除關閉按鈕。"""
+        self.title_bar = QWidget()
+        self.title_bar.setFixedHeight(35)
+        self.title_bar.setStyleSheet("background: transparent;")
+        layout = QHBoxLayout(self.title_bar)
+        layout.setContentsMargins(15, 0, 15, 0) # 調整右邊距
+        title_label = QLabel(self.title)
+        title_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #666666;")
+        layout.addWidget(title_label)
+        layout.addStretch()
+        # 此處不再新增關閉按鈕
+        return self.title_bar
+
+    def _redraw_phrase_list(self):
+        # 清空現有項目
+        while self.scroll_layout.count() > 1: # 保留最後的 addStretch
+            item = self.scroll_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.ui_elements.clear()
+
+        # 根據 self.phrases_buffer 重建列表
+        for index, phrase in enumerate(self.phrases_buffer):
+            self._create_phrase_item_widget(index, phrase)
+
+    def _create_phrase_item_widget(self, index, phrase_data):
+        phrase_card = QFrame()
+        phrase_card.setObjectName("PhraseItemCard")
+        card_layout = QHBoxLayout(self._add_shadow(phrase_card))
+        card_layout.setSpacing(10)
+
+        input_field = QLineEdit(phrase_data.get("text", ""))
+        input_field.setPlaceholderText(f"快捷語音 {index + 1}...")
+        input_field.editingFinished.connect(lambda i=index: self._update_phrase_text(i))
+        card_layout.addWidget(input_field)
+
+        # --- 變更: 合併快捷鍵顯示與設定按鈕 ---
+        hotkey_button = QPushButton(phrase_data.get("hotkey") or "設定快捷鍵")
+        hotkey_button.setCheckable(True)
+        hotkey_button.setFixedWidth(120)
+        hotkey_button.toggled.connect(lambda checked, i=index: self._record_quick_phrase_hotkey(i, checked))
+        card_layout.addWidget(hotkey_button)
+
+        delete_button = QPushButton("✕")
+        delete_button.setObjectName("DeleteButton")
+        delete_button.clicked.connect(lambda i=index: self._delete_phrase_item(i))
+        card_layout.addWidget(delete_button)
+        # 在 addStretch 之前插入
+        self.scroll_layout.insertWidget(self.scroll_layout.count() - 1, phrase_card)
+        self.ui_elements.append({
+            "card": phrase_card,
+            "input": input_field,
+            "hotkey_button": hotkey_button,
+            "delete_button": delete_button
+        })
+
+    def _add_phrase_item(self):
+        self.phrases_buffer.append({"text": "", "hotkey": ""})
+        self._redraw_phrase_list()
+
+    def _delete_phrase_item(self, index):
+        if 0 <= index < len(self.phrases_buffer):
+            del self.phrases_buffer[index]
+            self._redraw_phrase_list()
 
     def _update_phrase_text(self, index):
-        entry_widget = self.ui_elements[index]["entry"]
-        current_text = entry_widget.text()
-        self.app.quick_phrases[index]["text"] = current_text.strip()
+        input_widget = self.ui_elements[index]["input"]
+        self.phrases_buffer[index]["text"] = input_widget.text().strip()
+
+    def _save_and_close(self):
+        # 將緩衝區的內容寫回主程式的設定
+        self.app.quick_phrases = self.phrases_buffer
         self.app.config.set("quick_phrases", self.app.quick_phrases)
-        self.app.log_message(f"快捷語音 {index + 1} 已更新。")
+        self.app.log_message("快捷語音設定已儲存。")
+        # 如果服務正在運行，重啟快捷鍵監聽器以應用變更
+        if self.app.is_running:
+            self.app._start_hotkey_listener()
+        
+        # --- 快取邏輯: 觸發背景快取生成 ---
+        self.app.log_message("開始在背景更新快捷語音快取...")
+        for phrase in self.app.quick_phrases:
+            if phrase.get("text") and phrase.get("hotkey"):
+                self.app.audio.cache_phrase(phrase)
+
+        self.main_window.hide_overlay()
 
     def _record_quick_phrase_hotkey(self, index_to_edit, is_recording):
-        if not self.app._quick_phrase_lock.acquire(blocking=False):
-            self.ui_elements[index_to_edit]["button"].setChecked(False)
-            self.app.log_message("已在錄製另一個快捷鍵，請先完成。", "WARN")
-            return
-
-        # 禁用所有其他按鈕
-        for i, elem in enumerate(self.ui_elements):
-            if i != index_to_edit:
-                elem["button"].setEnabled(False)
-
-        current_btn = self.ui_elements[index_to_edit]["button"]
+        current_btn = self.ui_elements[index_to_edit]["hotkey_button"]
         if is_recording:
-            current_btn.setText("錄製中...")
-            current_btn.setStyleSheet(f"background-color: {self.parent().STATUS_ORANGE_COLOR}; color: {self.parent().ACCENT_TEXT_COLOR}; font-weight: bold;")
-            self._start_pynput_listener(index_to_edit)
-        else: # 錄製被取消或完成
-            self.app._quick_phrase_lock.release()
-            # 恢復所有按鈕
+            if not self.app._quick_phrase_lock.acquire(blocking=False):
+                current_btn.setChecked(False) # 立即將按鈕彈回
+                self.app.log_message("已在錄製另一個快捷鍵，請先完成。", "WARN")
+                return
+
+            # 禁用所有其他按鈕
             for i, elem in enumerate(self.ui_elements):
-                elem["button"].setEnabled(True)
-                elem["button"].setStyleSheet("")
+                if i != index_to_edit:
+                    elem["hotkey_button"].setEnabled(False)
+                    elem["delete_button"].setEnabled(False)
+
+            current_btn.setText("錄製中...") # 樣式由 QSS 處理
+            current_btn.setStyleSheet(f"background-color: {self.STATUS_ORANGE_COLOR}; color: {self.ACCENT_TEXT_COLOR}; font-weight: bold;")
+            self._start_pynput_listener(index_to_edit)
+        else: # 使用者手動點擊取消錄製
+            self.app.log_message("使用者取消了快捷鍵錄製。")
+            self._finalize_recording(index_to_edit)
+
+    def _finalize_recording(self, index):
+        """一個集中的函式，用於停止監聽、釋放鎖並恢復 UI。"""
+        # 停止 pynput 監聽器
+        if self._hotkey_listener:
+            self._hotkey_listener.stop()
+            self._hotkey_listener = None
+
+        # 安全地釋放鎖
+        if self.app._quick_phrase_lock.locked():
+            self.app._quick_phrase_lock.release()
+
+        # 恢復所有按鈕的狀態和外觀
+        for i, elem in enumerate(self.ui_elements):
+            elem["hotkey_button"].setText(self.phrases_buffer[i].get("hotkey") or "設定快捷鍵")
+            elem["hotkey_button"].setEnabled(True)
+            elem["delete_button"].setEnabled(True)
+            elem["hotkey_button"].setStyleSheet("") # 清除特定樣式
 
     def _start_pynput_listener(self, index_to_edit):
         from pynput import keyboard
@@ -320,23 +824,39 @@ class QuickPhrasesWindow(BaseDialog):
             normalized_hotkey = self.app._normalize_hotkey(hotkey_str)
 
             conflict_msg = self.app._check_hotkey_conflict(normalized_hotkey, 'quick_phrase', index_to_edit)
-            if conflict_msg:
-                QMessageBox.warning(self, "快捷鍵衝突", conflict_msg)
-            else:
-                self.app.quick_phrases[index_to_edit]["hotkey"] = normalized_hotkey
-                self._update_phrase_text(index_to_edit)
-                self.app.log_message(f"快捷語音 {index_to_edit + 1} 的快捷鍵已設為: {normalized_hotkey or '無'}")
+            
+            # --- 修正: 不直接操作 UI，而是發射信號 ---
+            # 發射信號，將 UI 更新任務交給主執行緒
+            self.hotkey_recorded_signal.emit(index_to_edit, normalized_hotkey, conflict_msg or "")
 
-            # 恢復 UI
-            self.ui_elements[index_to_edit]["button"].setChecked(False) # 這會觸發 toggled 信號，進而釋放鎖和恢復按鈕
-            self.ui_elements[index_to_edit]["button"].setText(self.app.quick_phrases[index_to_edit].get("hotkey") or "設定快捷鍵")
-
-            if self.app.is_running:
-                self.app._start_hotkey_listener()
             return False
 
-        listener = keyboard.Listener(on_press=on_press, on_release=on_release)
-        listener.start()
+        # 確保在啟動新監聽器之前停止舊的
+        if self._hotkey_listener:
+            self._hotkey_listener.stop()
+            self._hotkey_listener = None
+
+        self._hotkey_listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+        self._hotkey_listener.start()
+
+    def _on_hotkey_recorded(self, index, hotkey_str, conflict_msg):
+        """在主執行緒中安全地處理快捷鍵錄製完成後的 UI 更新。"""
+        if conflict_msg:
+            # 使用 app controller 的安全訊息框方法
+            self.app.show_messagebox("快捷鍵衝突", conflict_msg, "warning")
+        else:
+            # 在主執行緒中更新數據
+            self.phrases_buffer[index]["hotkey"] = hotkey_str
+            self.app.log_message(f"快捷語音 {index + 1} 的快捷鍵已設為: {hotkey_str or '無'}")
+        
+        # --- 核心修正: 直接呼叫 finalize 函式，而不是觸發 toggled 信號 ---
+        if 0 <= index < len(self.ui_elements):
+            # 確保按鈕的勾選狀態被重設，但要阻止它再次觸發 _record_quick_phrase_hotkey
+            button = self.ui_elements[index]["hotkey_button"]
+            button.blockSignals(True)
+            self.ui_elements[index]["hotkey_button"].setChecked(False)
+            button.blockSignals(False)
+            self._finalize_recording(index)
 
 class QuickInputWindow(QWidget):
     def __init__(self, app_controller):

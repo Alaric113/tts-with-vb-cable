@@ -34,6 +34,8 @@ class ConfigManager:
         "text_history": [],
         "config_version": CONFIG_VERSION, # 將版本號加入預設設定
         "show_log_area": True,
+        "custom_voices": [], # 新增: 儲存自訂語音
+        "visible_voices": [], # 新增: 儲存要在主視窗顯示的語音
     }
 
     def __init__(self, log_func):

@@ -1,7 +1,7 @@
 {
     "engine": "edge-tts",
-    "voice": "zh-CN-XiaoxiaoNeural",
-    "rate": 170,
+    "voice": "zh-CN-XiaochenNeural",
+    "rate": 189,
     "volume": 1.0,
     "hotkey": "<shift>+z",
     "quick_phrases": [
@@ -10,12 +10,12 @@
             "hotkey": "<f2>"
         },
         {
-            "text": "",
-            "hotkey": ""
+            "text": "你好",
+            "hotkey": "<f3>"
         },
         {
-            "text": "",
-            "hotkey": ""
+            "text": "喵",
+            "hotkey": "<f1>"
         },
         {
             "text": "",
@@ -47,21 +47,29 @@
         }
     ],
     "quick_input_position": "bottom-right",
-    "local_output_device_name": "CABLE In 16 Ch (2- VB-Audio Vir",
+    "local_output_device_name": "Microsoft 音效對應表 - Output",
     "enable_quick_phrases": true,
     "enable_listen_to_self": true,
-    "listen_device_name": "Default",
+    "listen_device_name": "Microsoft 音效對應表 - Output",
     "listen_volume": 1.0,
     "auto_start_service": true,
     "text_history": [
-        "123",
+        "456",
+        "Z123",
+        "喵",
         "你好",
+        "123",
+        "ㄑ",
         "321",
+        "12",
         "Z1",
-        "23",
-        "456"
+        "23"
     ],
     "config_version": "1.0",
     "show_log_area": true,
-    "pitch": 0
+    "custom_voices": [],
+    "visible_voices": [
+        "zh-CN-YunjieNeural"
+    ],
+    "pitch": 9
 }

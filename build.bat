@@ -3,69 +3,49 @@ chcp 65001 > NUL
 
 REM 將當前目錄切換到批次檔所在的目錄，確保相對路徑的正確性
 cd /d "%~dp0"
-echo [Build Script] 當前工作目錄已設定為: %cd%
 
-echo [Build Script] 清理舊的打包檔案...
-if exist "build" (
-    echo [Build Script] 正在刪除 build 資料夾...
-    rmdir /s /q build
-)
+echo [BUILD] 正在清理舊的建置檔案...
 if exist "dist" (
-    echo [Build Script] 正在刪除 dist 資料夾...
-    rmdir /s /q dist
+    rmdir /s /q "dist"
 )
-echo [Build Script] 清理完成。
-echo.
-
-echo [Build Script] ========== 步驟 1: 打包更新精靈 (update_wizard) ==========
-pyinstaller update_wizard.spec
-if %errorlevel% neq 0 (
-    echo [Build Script] !! 錯誤: 打包 update_wizard 失敗。請檢查上面的錯誤訊息。
-    pause
-    exit /b 1
+if exist "build" (
+    rmdir /s /q "build"
 )
-echo [Build Script] ========== 步驟 1 完成。 ==========
-echo.
 
-echo [Build Script] ========== 步驟 2: 打包主程式 (JuMouth) ==========
+echo [BUILD] 開始使用 PyInstaller 進行打包...
 pyinstaller JuMouth.spec
+
 if %errorlevel% neq 0 (
-    echo [Build Script] !! 錯誤: 打包 JuMouth 失敗。請檢查上面的錯誤訊息。
+    echo.
+    echo [ERROR] PyInstaller 打包失敗！
     pause
     exit /b 1
 )
-echo [Build Script] ========== 步驟 2 完成。 ==========
+
 echo.
+echo [BUILD] 打包成功，等待檔案釋放...
+REM 加入一個短暫延遲，防止壓縮時檔案被鎖定
+timeout /t 2 /nobreak > NUL
 
-echo [Build Script] ========== 步驟 3: 組合最終應用程式 ==========
-echo [Build Script] 正在建立目標資料夾: dist\JuMouth\_internal\update_wizard
-mkdir "dist\JuMouth\_internal"
-mkdir "dist\JuMouth\_internal\update_wizard"
+echo [BUILD] 現在開始壓縮檔案以供發布...
 
-echo [Build Script] 正在將更新精靈複製到主程式目錄中...
-xcopy "dist\update_wizard" "dist\JuMouth\_internal\update_wizard" /E /I /Y
-if %errorlevel% neq 0 (
-    echo [Build Script] !! 錯誤: 複製 update_wizard 失敗。
-    pause
-    exit /b 1
-)
-echo [Build Script] ========== 步驟 3 完成。 ==========
-echo.
-
-echo [Build Script] ========== 步驟 4: 建立更新用的 ZIP 壓縮檔 ==========
 set ZIP_FILENAME=JuMouth_update.zip
 if exist "%ZIP_FILENAME%" (
     del "%ZIP_FILENAME%"
 )
-echo [Build Script] 正在壓縮 'dist\JuMouth' 的內容到 %ZIP_FILENAME%...
+
+echo [BUILD] 正在壓縮 'dist\JuMouth' 的內容到 %ZIP_FILENAME%...
 powershell -command "Compress-Archive -Path 'dist\JuMouth\*' -DestinationPath '%ZIP_FILENAME%'"
+
 if %errorlevel% neq 0 (
-    echo [Build Script] !! 錯誤: 建立 ZIP 壓縮檔失敗。
+    echo.
+    echo [ERROR] 建立 ZIP 壓縮檔失敗！請確認 PowerShell 是否可正常運作。
     pause
     exit /b 1
 )
-echo [Build Script] ========== 步驟 4 完成。 ==========
-echo.
 
-echo [Build Script] >>> 所有打包工作已成功完成！ <<<
-echo [Build Script] 最終的應用程式位於 'dist\JuMouth' 資料夾中。
+echo.
+echo [SUCCESS] 所有工作已成功完成！
+echo 執行檔位於 'dist\JuMouth' 資料夾中。
+echo 更新用的壓縮檔為 '%ZIP_FILENAME%'。
+pause

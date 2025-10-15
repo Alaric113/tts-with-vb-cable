@@ -8,6 +8,7 @@ import threading
 import webbrowser
 import requests
 from packaging.version import parse as parse_version
+from PyQt6.QtCore import QTimer
 from ..utils.deps import APP_VERSION, GITHUB_REPO, IS_WINDOWS
 
 # 可選 Windows 依賴
@@ -52,27 +53,29 @@ class UpdateManager:
             
             if parse_version(latest_version_str) > parse_version(APP_VERSION):
                 self.app.log_message(f"發現新版本: {latest_version_str} (當前版本: {APP_VERSION})", "INFO")
-                download_url = latest_release["html_url"]
                 assets = latest_release.get('assets', [])
                 
-                exe_asset = next((a for a in assets if a['name'].endswith('.exe')), None)
-                zip_asset = next((a for a in assets if a['name'].endswith('.zip')), None)
+                # --- 核心修正: 尋找 JuMouth_update.zip 的下載連結 ---
+                zip_asset = next((a for a in assets if a['name'] == 'JuMouth_update.zip'), None)
 
-                def ask_and_act():
-                    # 變更邏輯：優先檢查 .zip 進行原地熱更新
-                    # 由於 show_messagebox 變成非同步，我們不能再依賴它的返回值。
-                    # 這裡簡化邏輯：直接顯示一個帶有 "是/否" 按鈕的訊息框，但程式不會等待結果。
-                    # 使用者需要手動操作。這是一個暫時的解決方案，未來可以透過更複雜的信號機制來處理。
-                    # 為了讓程式能繼續，我們暫時移除 if 判斷。
-                    self.app.show_messagebox("發現新版本", 
-                        f"檢測到新版本 {latest_version_str}！\n(您目前使用的是 {APP_VERSION})\n\n"
-                        "請前往 GitHub 頁面手動下載更新。", 
-                        "info")
-                    webbrowser.open_new_tab(download_url)
-                
-                # ask_and_act() # 直接呼叫
-                # 由於 show_messagebox 的非同步性，我們暫時簡化更新提示邏輯
-                self.app.show_messagebox("發現新版本", f"檢測到新版本 {latest_version_str}！\n(您目前使用的是 {APP_VERSION})\n\n請前往 GitHub 頁面手動下載更新。", "info")
+                if zip_asset and 'browser_download_url' in zip_asset:
+                    zip_download_url = zip_asset['browser_download_url']
+                    
+                    def on_user_choice(do_update):
+                        if do_update:
+                            self._launch_update_wizard(zip_download_url)
+
+                    self.app.show_messagebox(
+                        "發現新版本",
+                        f"檢測到新版本 {latest_version_str}！ (您目前使用的是 {APP_VERSION})\n\n是否要立即自動下載並更新？\n\n(主程式將在下載完成後自動關閉並重啟)",
+                        "yesno",
+                        callback=on_user_choice
+                    )
+                else:
+                    # 如果找不到 zip 檔，則退回手動更新
+                    self.app.log_message("在新版本中未找到 'JuMouth_update.zip'，引導使用者手動更新。", "WARN")
+                    self.app.show_messagebox("發現新版本", f"檢測到新版本 {latest_version_str}！\n\n但在發布中未找到自動更新包，請前往 GitHub 頁面手動下載。", "info")
+                    webbrowser.open_new_tab(latest_release["html_url"])
 
             else:
                 self.app.log_message(f"目前已是最新版本 ({APP_VERSION})。", "INFO")
@@ -130,7 +133,7 @@ class UpdateManager:
                 creationflags=subprocess.DETACHED_PROCESS, close_fds=True, startupinfo=self.app.startupinfo
             )
             
-            self.app.root.after(1000, self.app.on_closing)
+            QTimer.singleShot(1000, self.app.on_closing)
 
         except Exception as e:
             error_msg = f"啟動更新程序時發生錯誤: {e!r}"

@@ -15,10 +15,11 @@ import threading
 import tempfile
 import numpy as np
 import sounddevice as sd
-import edge_tts
 from datetime import datetime
 import subprocess
 import queue
+import hashlib
+import edge_tts
 
 from ..utils.deps import (
     DEFAULT_EDGE_VOICE, ENGINE_EDGE, ENGINE_PYTTX3, CABLE_INPUT_HINT
@@ -203,18 +204,23 @@ class AudioEngine:
     def get_output_device_names(self):
         return list(self._local_output_devices.keys()) if self._local_output_devices else ["Default (無可用設備)"]
 
+    def get_all_edge_voices(self):
+        return self._edge_voices
+
     # ---------- 合成 ----------
     async def _synth_edge_to_file(self, text, path):
+        # --- 核心修正: 允許在合成時覆寫聲線 ---
+        voice = self.edge_voice
         rate_param = f"{int(round((self.tts_rate - 175) * (40 / 75))):+d}%"
         volume_param = f"{int((self.tts_volume - 1.0) * 100):+d}%"
         pitch_param = f"{int(self.tts_pitch):+d}Hz"
-        comm = edge_tts.Communicate(text, self.edge_voice, rate=rate_param, volume=volume_param, pitch=pitch_param)
+        comm = edge_tts.Communicate(text, voice, rate=rate_param, volume=volume_param, pitch=pitch_param)
         await comm.save(path)
 
     def _synth_pyttsx3_to_file(self, text, path):
         if not self._pyttsx3_engine:
             self.log("pyttsx3 引擎未初始化。", "ERROR")
-            raise RuntimeError("pyttsx3 engine not initialized.")
+            raise RuntimeError("pyttsx3 engine not initialized.") # type: ignore
         self._pyttsx3_engine.setProperty("rate", self.tts_rate)
         self._pyttsx3_engine.setProperty("volume", self.tts_volume)
         if self.pyttsx3_voice_id:
@@ -252,18 +258,80 @@ class AudioEngine:
 
     def play_text(self, text: str):
         """Producer method: puts text into the queue to be played."""
-        self.log(f"play_text received: '{text}'", "DEBUG")
-        if not isinstance(text, str) or not text.strip():
+        # --- 修正: 處理元組格式的 text ---
+        if isinstance(text, tuple):
+            self.log(f"play_text received (cached): '{text[1]}'", "DEBUG")
+        else:
+            self.log(f"play_text received: '{text}'", "DEBUG")
+
+        # --- 核心修正: 只有當 text 是字串時才進行空值檢查 ---
+        if isinstance(text, str) and not text.strip():
             return
+
         self.play_queue.put(text)
 
-    def preview_text(self, text: str):
+    def cache_phrase(self, phrase_info: dict):
+        """
+        將快捷語音的文字合成為快取檔案。
+        這會在背景執行緒中處理，不會阻塞 UI。
+        """
+        self.play_queue.put((phrase_info, "cache"))
+
+    def _get_cache_path(self, text, engine, voice, rate, pitch):
+        """根據參數產生唯一的快取檔案路徑。"""
+        from ..utils.deps import CACHE_DIR, ensure_dir
+        ensure_dir(CACHE_DIR)
+        
+        # 建立一個能代表當前語音設定的字串
+        props_str = f"{text}-{engine}-{voice}-{rate}-{pitch}"
+        
+        # 使用 SHA1 產生穩定且唯一的檔名
+        hasher = hashlib.sha1(props_str.encode('utf-8'))
+        filename = f"{hasher.hexdigest()}.wav"
+        
+        return os.path.join(CACHE_DIR, filename)
+
+    def _process_caching(self, phrase_info: dict, loop: asyncio.AbstractEventLoop):
+        """在背景執行緒中合成並儲存快取檔案的實際邏輯。"""
+        # --- 核心修正: 確保 pydub 已被匯入 ---
+        global AudioSegment
+        if AudioSegment is None:
+            from pydub import AudioSegment
+
+        text = phrase_info.get("text")
+        if not text:
+            return
+
+        # 根據當前設定產生目標快取路徑
+        cache_path = self._get_cache_path(text, self.current_engine, self.edge_voice if self.current_engine == ENGINE_EDGE else self.pyttsx3_voice_id, self.tts_rate, self.tts_pitch)
+        
+        # 如果快取已存在，則無需重新生成
+        if os.path.exists(cache_path):
+            self.log(f"快取已存在: '{text[:10]}...'", "DEBUG")
+            return
+
+        self.log(f"正在為 '{text[:10]}...' 建立語音快取...")
+        try:
+            if self.current_engine == ENGINE_EDGE:
+                # Edge-TTS 直接存成 WAV 可能有問題，先存 MP3 再轉
+                with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_mp3:
+                    loop.run_until_complete(self._synth_edge_to_file(text, tmp_mp3.name))
+                    audio = AudioSegment.from_mp3(tmp_mp3.name)
+                    audio.export(cache_path, format="wav")
+                os.remove(tmp_mp3.name)
+            else: # pyttsx3
+                self._synth_pyttsx3_to_file(text, cache_path)
+            self.log(f"快取建立成功: {os.path.basename(cache_path)}", "INFO")
+        except Exception as e:
+            self.log(f"為 '{text[:10]}...' 建立快取失敗: {e}", "ERROR")
+
+    def preview_text(self, text: str, override_voice: str = None, override_rate: int = None, override_pitch: int = None):
         """Producer method for previewing: puts text into the queue to be played on listen device only."""
         self.log(f"preview_text received: '{text}'", "DEBUG")
         if not isinstance(text, str) or not text.strip():
             return
         # 使用一個特殊元組來標記這是一個預覽請求
-        self.play_queue.put((text, "preview"))
+        self.play_queue.put((text, "preview", override_voice, override_rate, override_pitch))
 
     def _process_and_play_text(self, text: str, loop: asyncio.AbstractEventLoop, startupinfo=None):
         """
@@ -272,14 +340,44 @@ class AudioEngine:
         """
 
         animation_stop_event = threading.Event()
+        
+        # --- 快取邏輯 ---
+        # 檢查傳入的是否為快取請求
+        if isinstance(text, tuple) and text[1] == "cache":
+            phrase_info = text[0]
+            self._process_caching(phrase_info, loop)
+            return # 快取任務完成後直接返回，不播放
+        
+        # --- 核心修正: 處理來自快取播放的元組 ---
+        is_cached_play = False
         is_preview = False
+        original_text_for_cache = None
+        voice_override = None
+        rate_override = None
+        pitch_override = None
+
         if isinstance(text, tuple):
-            text, mode = text
-            if mode == "preview":
+            original_tuple = text # 保存原始元組
+            # 檢查是預覽元組 (text, "preview") 還是快取元組 (path, original_text)
+            if len(original_tuple) >= 2 and original_tuple[1] == "preview": # (text, "preview", voice, rate, pitch)
                 is_preview = True
+                text = original_tuple[0]
+                if len(original_tuple) > 2 and original_tuple[2] is not None:
+                    voice_override = original_tuple[2]
+                if len(original_tuple) > 3 and original_tuple[3] is not None:
+                    rate_override = original_tuple[3]
+                if len(original_tuple) > 4 and original_tuple[4] is not None:
+                    pitch_override = original_tuple[4]
+            elif len(original_tuple) == 2 and os.path.isfile(str(original_tuple[0])): # type: ignore
+                is_cached_play = True
+                original_text_for_cache = text[1]
+                text = text[0] # text 現在是檔案路徑
+
+        # 根據播放類型決定顯示的文字
+        display_text = original_text_for_cache if is_cached_play else text
 
         animation_thread = threading.Thread(
-            target=self._animate_playback, args=(text, animation_stop_event), daemon=True
+            target=self._animate_playback, args=(display_text, animation_stop_event), daemon=True
         )
         synth_suffix = ".mp3" if self.current_engine == ENGINE_EDGE else ".wav"
         fd, synth_path = tempfile.mkstemp(suffix=synth_suffix)
@@ -292,14 +390,37 @@ class AudioEngine:
             if AudioSegment is None:
                 from pydub import AudioSegment
 
-            if self.current_engine == ENGINE_EDGE:
-                loop.run_until_complete(self._synth_edge_to_file(text, synth_path))
-            else:
-                self._synth_pyttsx3_to_file(text, synth_path)
+            # 如果是快取播放，直接使用該路徑；否則，即時合成
+            play_file_path = text if is_cached_play else synth_path
+            if not is_cached_play:
+                if self.current_engine == ENGINE_EDGE:
+                    # --- 核心修正: 在試聽時臨時覆寫聲線 ---
+                    original_rate = self.tts_rate
+                    original_pitch = self.tts_pitch
+                    original_voice = self.edge_voice
+
+                    # --- 增強: 試聽時使用覆寫的參數 ---
+                    if is_preview: # 只有預覽時才覆寫
+                        self.tts_rate = rate_override if rate_override is not None else 175
+                        self.tts_pitch = pitch_override if pitch_override is not None else 0
+
+                    if voice_override:
+                        self.edge_voice = voice_override
+
+                    loop.run_until_complete(self._synth_edge_to_file(text, play_file_path))
+
+                    # 合成後立即恢復
+                    self.tts_rate = original_rate
+                    self.tts_pitch = original_pitch
+                    self.edge_voice = original_voice
+                else:
+                    # pyttsx3 試聽暫不支援覆寫，因其引擎狀態是同步的
+                    self._synth_pyttsx3_to_file(text, play_file_path)
 
             # --- 清理: 移除本地猴子補丁，現在由全域的 runtime_hook 處理 ---
-            audio = AudioSegment.from_file(synth_path)
+            audio = AudioSegment.from_file(play_file_path)
 
+            # --- 播放邏輯 (與之前相同) ---
             main_device_id = None
             if not is_preview:
                 main_device_id = self._local_output_devices.get(self.local_output_device_name)
@@ -313,10 +434,6 @@ class AudioEngine:
                 if listen_device_id is None:
                     listen_device_id = sd.default.device[1]
             
-            # 如果是預覽，則主設備ID強制設為None
-            if is_preview:
-                main_device_id = None
-
             try:
                 main_info = sd.query_devices(main_device_id)
                 main_sr = int(main_info.get('default_samplerate', audio.frame_rate))
@@ -336,8 +453,15 @@ class AudioEngine:
                     listen_sr = int(audio.frame_rate)
                     listen_max_ch = 2
 
-            # 單設備
-            if (not self.enable_listen_to_self and not is_preview) or listen_device_id is None or listen_device_id == main_device_id:
+            # --- 核心修正: 重新組織播放邏輯 ---
+            # 1. 純預覽模式 (未啟用聆聽自己)
+            if is_preview and not self.enable_listen_to_self:
+                self._play_to_single_device(audio, listen_sr, listen_device_id, listen_max_ch, self.listen_volume, display_text, is_preview=True)
+                return
+
+            # 2. 單設備播放模式 (主設備播放，且未啟用聆聽)
+            if not is_preview and not self.enable_listen_to_self:
+                self._play_to_single_device(audio, main_sr, main_device_id, main_max_ch, 1.0, display_text)
                 target_sr = main_sr
                 audio_play = self._resample_audio_segment(audio, target_sr) if int(audio.frame_rate) != int(target_sr) else audio
                 samples = self._audiosegment_to_float32_numpy(audio_play)
@@ -346,33 +470,15 @@ class AudioEngine:
                 try:
                     sd.play(samples, samplerate=target_sr, device=main_device_id)
                     sd.wait()
-                    self.status_queue.put(("PLAY", "[✔]", f"播放完畢: {text[:20]}..."))
+                    self.status_queue.put(("PLAY", "[✔]", f"播放完畢: {display_text[:20]}..."))
                 except Exception as e:
                     self.log(f"播放到主設備失敗: {e}", "ERROR")
                 finally:
                     try: sd.stop()
                     except Exception: pass
                     return
-
-            # 僅預覽（只播放在 listen_device_id 上）
-            if is_preview:
-                target_sr = listen_sr
-                audio_play = self._resample_audio_segment(audio, target_sr) if int(audio.frame_rate) != int(target_sr) else audio
-                samples = self._audiosegment_to_float32_numpy(audio_play) * float(self.listen_volume)
-                if samples.ndim == 1 and listen_max_ch >= 2:
-                    samples = np.column_stack((samples, samples))
-                try:
-                    sd.play(samples, samplerate=target_sr, device=listen_device_id)
-                    sd.wait()
-                    self.status_queue.put(("PLAY", "[✔]", f"試聽完畢: {text[:20]}..."))
-                except Exception as e:
-                    self.log(f"試聽失敗: {e}", "ERROR")
-                finally:
-                    try: sd.stop()
-                    except Exception: pass
-                return
-
-            # 兩設備並行
+            
+            # 3. 雙設備並行播放模式 (主設備 + 聆聽設備)
             if int(audio.frame_rate) != int(main_sr):
                 audio_main = self._resample_audio_segment(audio, main_sr)
             else:
@@ -405,9 +511,9 @@ class AudioEngine:
             t1.join();  t2.join()
 
             if not playback_errors:
-                self.status_queue.put(("PLAY", "[✔]", f"播放完畢: {text[:20]}..."))
+                self.status_queue.put(("PLAY", "[✔]", f"播放完畢: {display_text[:20]}..."))
             else:
-                self.status_queue.put(("PLAY", "[❌]", f"播放時發生錯誤: {text[:20]}..."))
+                self.status_queue.put(("PLAY", "[❌]", f"播放時發生錯誤: {display_text[:20]}..."))
 
         except Exception as e:
             self.log(f"播放錯誤: {e}", "ERROR")
@@ -418,6 +524,27 @@ class AudioEngine:
                     animation_thread.join(timeout=0.2)
             except Exception:
                 pass
-            if os.path.exists(synth_path):
-                try: os.remove(synth_path)
-                except Exception: pass
+            # 只刪除即時合成的臨時檔案，不刪除快取檔案
+            if not is_cached_play and os.path.exists(synth_path):
+                try:
+                    os.remove(synth_path)
+                except Exception:
+                    pass
+
+    def _play_to_single_device(self, audio, target_sr, device_id, max_ch, volume, display_text, is_preview=False):
+        """將音訊播放到單一設備的輔助函式。"""
+        audio_play = self._resample_audio_segment(audio, target_sr) if int(audio.frame_rate) != int(target_sr) else audio
+        samples = self._audiosegment_to_float32_numpy(audio_play) * float(volume)
+        if samples.ndim == 1 and max_ch >= 2:
+            samples = np.column_stack((samples, samples))
+        try:
+            sd.play(samples, samplerate=target_sr, device=device_id)
+            sd.wait()
+            log_msg = f"試聽完畢: {display_text[:20]}..." if is_preview else f"播放完畢: {display_text[:20]}..."
+            self.status_queue.put(("PLAY", "[✔]", log_msg))
+        except Exception as e:
+            log_msg = f"試聽失敗: {e}" if is_preview else f"播放到主設備失敗: {e}"
+            self.log(log_msg, "ERROR")
+        finally:
+            try: sd.stop()
+            except Exception: pass
