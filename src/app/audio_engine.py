@@ -30,13 +30,14 @@ pyttsx3 = None
 AudioSegment = None
 
 class AudioEngine:
-    def __init__(self, log, status_update_queue):
+    def __init__(self, log_callback, status_queue, startupinfo=None):
         """
         log(text, level='INFO')
         status_update_queue: A queue to send status updates to the UI thread.
         """
-        self.log = log
-        self.status_queue = status_update_queue
+        self.log = log_callback
+        self.status_queue = status_queue
+        self.startupinfo = startupinfo
 
         self.current_engine = ENGINE_EDGE
         self.edge_voice = DEFAULT_EDGE_VOICE
@@ -81,14 +82,6 @@ class AudioEngine:
         asyncio.set_event_loop(loop)
         self.log("音訊工作執行緒已啟動。", "DEBUG")
 
-        # --- 修正: 建立 startupinfo 以隱藏 pydub 可能呼叫的 ffmpeg 主控台視窗 ---
-        startupinfo = None
-        if os.name == 'nt':
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = subprocess.SW_HIDE
-        # --------------------------------------------------------------------
-
         while True:
             try:
                 text = self.play_queue.get()
@@ -96,7 +89,7 @@ class AudioEngine:
                     self.log("音訊工作執行緒收到停止信號。", "DEBUG")
                     break
                 # Pass the running loop to the processing function
-                self._process_and_play_text(text, loop, startupinfo)
+                self._process_and_play_text(text, loop, self.startupinfo)
             except Exception as e:
                 self.log(f"音訊工作執行緒發生錯誤: {e}", "ERROR")
         self.log("音訊工作執行緒已結束。", "DEBUG")
@@ -396,12 +389,14 @@ class AudioEngine:
                 if self.current_engine == ENGINE_EDGE:
                     # --- 核心修正: 在試聽時臨時覆寫聲線 ---
                     original_rate = self.tts_rate
+                    original_volume = self.tts_volume
                     original_pitch = self.tts_pitch
                     original_voice = self.edge_voice
 
                     # --- 增強: 試聽時使用覆寫的參數 ---
                     if is_preview: # 只有預覽時才覆寫
                         self.tts_rate = rate_override if rate_override is not None else 175
+                        # 音量暫不提供覆寫，但未來可擴充
                         self.tts_pitch = pitch_override if pitch_override is not None else 0
 
                     if voice_override:
@@ -410,6 +405,7 @@ class AudioEngine:
                     loop.run_until_complete(self._synth_edge_to_file(text, play_file_path))
 
                     # 合成後立即恢復
+                    self.tts_volume = original_volume
                     self.tts_rate = original_rate
                     self.tts_pitch = original_pitch
                     self.edge_voice = original_voice

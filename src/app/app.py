@@ -75,7 +75,7 @@ class LocalTTSPlayer(QObject):
 
         # 狀態/設定
         # 音訊核心 (必須在 _build_ui 之前建立，以便 UI 取得初始值)
-        self.audio = AudioEngine(self.log_message, self.audio_status_queue)
+        self.audio = AudioEngine(self.log_message, self.audio_status_queue, startupinfo=self.startupinfo)
         self.updater = UpdateManager(self) # 建立更新管理器
 
         self.is_running = False
@@ -345,6 +345,9 @@ class LocalTTSPlayer(QObject):
         
         # --- 核心修正: UI 載入完成，允許事件觸發 ---
         self._ui_loading = False
+
+        # 觸發一次設定更新，以確保 UI 和 config 一致
+        self.update_tts_settings()
 
     def _process_audio_status_queue(self):
         """從音訊執行緒的佇列中讀取狀態並更新 UI。"""
@@ -739,8 +742,9 @@ class LocalTTSPlayer(QObject):
             # 是自訂語音，套用其設定
             self.audio.set_edge_voice(voice_data["base_voice"])
             self.main_window.speed_slider.setValue(voice_data["rate"])
-            self.main_window.pitch_slider.setValue(voice_data["pitch"])
-            # update_tts_settings 會自動更新 audio engine 和 config
+            # --- 修正: 增加音量設定 ---
+            self.main_window.volume_slider.setValue(int(voice_data.get("volume", 1.0) * 100))
+            self.main_window.pitch_slider.setValue(voice_data.get("pitch", 0)) # 使用 .get 增加安全性
             self.update_tts_settings()
         else:
             # 是原始語音
@@ -765,6 +769,10 @@ class LocalTTSPlayer(QObject):
         self.config.set("local_output_device_name", device_name)
 
     def update_tts_settings(self, _=None):
+        # --- 核心修正: 防止在 UI 載入過程中觸發 ---
+        if self._ui_loading:
+            return
+
         self.audio.tts_rate = self.main_window.speed_slider.value()
         self.audio.tts_volume = round(self.main_window.volume_slider.value() / 100.0, 2)
         self.audio.tts_pitch = self.main_window.pitch_slider.value()

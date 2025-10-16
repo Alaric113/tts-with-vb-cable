@@ -12,6 +12,24 @@ from PyQt6.QtGui import QFont, QIcon, QColor
 import os
 import sys
 
+class WheelAdjustableSlider(QSlider):
+    """一個可透過滑鼠滾輪調整數值的 QSlider。"""
+    def __init__(self, orientation, parent=None):
+        super().__init__(orientation, parent)
+        # 設定焦點策略，確保滑鼠懸停時能接收滾輪事件
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):
+        """覆寫滾輪事件處理函式。"""
+        # 根據滾輪滾動方向調整數值
+        delta = event.angleDelta().y()
+        if delta > 0: # 向上滾動
+            self.setValue(self.value() + 1)
+        elif delta < 0: # 向下滾動
+            self.setValue(self.value() - 1)
+        
+        event.accept() # 接受事件，防止其傳播到父元件
+
 class MainWindow(QMainWindow):
     def __init__(self, app_controller):
         super().__init__()
@@ -521,27 +539,14 @@ class MainWindow(QMainWindow):
         speed_layout = QVBoxLayout()
         speed_layout.setContentsMargins(0, 0, 0, 0)
         speed_layout.setSpacing(5) # 減少垂直間距
-        speed_layout.addWidget(QLabel("語速"), 0, Qt.AlignmentFlag.AlignCenter)
-        # --- 新增: 微調按鈕 ---
-        speed_plus_btn = QPushButton("+")
-        speed_plus_btn.setFixedSize(24, 24)
-        speed_plus_btn.setObjectName("ToolButton")
-        speed_plus_btn.clicked.connect(lambda: self.speed_slider.setValue(self.speed_slider.value() + 1))
+        speed_layout.addWidget(QLabel("語速"), 0, Qt.AlignmentFlag.AlignCenter) # 標題
 
-        self.speed_slider = QSlider(Qt.Orientation.Vertical)
+        self.speed_slider = WheelAdjustableSlider(Qt.Orientation.Vertical)
         self.speed_slider.setRange(100, 250)
         self.speed_slider.setValue(self.app.audio.tts_rate)
         self.speed_slider.valueChanged.connect(self.app.update_tts_settings)
 
-        speed_minus_btn = QPushButton("-")
-        speed_minus_btn.setFixedSize(24, 24)
-        speed_minus_btn.setObjectName("ToolButton")
-        speed_minus_btn.clicked.connect(lambda: self.speed_slider.setValue(self.speed_slider.value() - 1))
-
-        # --- 核心修正: 簡化佈局，並確保所有元件都置中 ---
-        speed_layout.addWidget(speed_plus_btn, 0, Qt.AlignmentFlag.AlignCenter)
-        speed_layout.addWidget(self.speed_slider, 1, Qt.AlignmentFlag.AlignCenter) # stretch=1
-        speed_layout.addWidget(speed_minus_btn, 0, Qt.AlignmentFlag.AlignCenter)
+        speed_layout.addWidget(self.speed_slider, 1) # stretch=1, 移除置中對齊以填滿空間
 
         self.speed_value_label = QLabel(str(self.app.audio.tts_rate))
         speed_layout.addWidget(self.speed_value_label, 0, Qt.AlignmentFlag.AlignCenter)
@@ -550,28 +555,15 @@ class MainWindow(QMainWindow):
         # 音量
         volume_layout = QVBoxLayout()
         volume_layout.setContentsMargins(0, 0, 0, 0)
-        volume_layout.setSpacing(5) # 減少垂直間距
-        volume_layout.addWidget(QLabel("音量"), 0, Qt.AlignmentFlag.AlignCenter)
-        # --- 新增: 微調按鈕 ---
-        vol_plus_btn = QPushButton("+")
-        vol_plus_btn.setFixedSize(24, 24)
-        vol_plus_btn.setObjectName("ToolButton")
-        vol_plus_btn.clicked.connect(lambda: self.volume_slider.setValue(self.volume_slider.value() + 1))
+        volume_layout.setSpacing(5)
+        volume_layout.addWidget(QLabel("音量"), 0, Qt.AlignmentFlag.AlignCenter) # 標題
 
-        self.volume_slider = QSlider(Qt.Orientation.Vertical)
+        self.volume_slider = WheelAdjustableSlider(Qt.Orientation.Vertical)
         self.volume_slider.setRange(50, 100) # 0.5 to 1.0
         self.volume_slider.setValue(int(self.app.audio.tts_volume * 100))
         self.volume_slider.valueChanged.connect(self.app.update_tts_settings)
 
-        vol_minus_btn = QPushButton("-")
-        vol_minus_btn.setFixedSize(24, 24)
-        vol_minus_btn.setObjectName("ToolButton")
-        vol_minus_btn.clicked.connect(lambda: self.volume_slider.setValue(self.volume_slider.value() - 1))
-
-        # --- 核心修正: 簡化佈局，並確保所有元件都置中 ---
-        volume_layout.addWidget(vol_plus_btn, 0, Qt.AlignmentFlag.AlignCenter)
-        volume_layout.addWidget(self.volume_slider, 1, Qt.AlignmentFlag.AlignCenter) # stretch=1
-        volume_layout.addWidget(vol_minus_btn, 0, Qt.AlignmentFlag.AlignCenter)
+        volume_layout.addWidget(self.volume_slider, 1) # stretch=1, 移除置中對齊以填滿空間
 
         self.volume_value_label = QLabel(f"{self.app.audio.tts_volume:.2f}")
         volume_layout.addWidget(self.volume_value_label, 0, Qt.AlignmentFlag.AlignCenter)
@@ -580,35 +572,21 @@ class MainWindow(QMainWindow):
         # 音高
         pitch_layout = QVBoxLayout()
         pitch_layout.setContentsMargins(0, 0, 0, 0)
-        pitch_layout.setSpacing(5) # 減少垂直間距
-        pitch_layout.addWidget(QLabel("音高"), 0, Qt.AlignmentFlag.AlignCenter)
-        # --- 新增: 微調按鈕 ---
-        pitch_plus_btn = QPushButton("+")
-        pitch_plus_btn.setFixedSize(24, 24)
-        pitch_plus_btn.setObjectName("ToolButton")
-        pitch_plus_btn.clicked.connect(lambda: self.pitch_slider.setValue(self.pitch_slider.value() + 1))
+        pitch_layout.setSpacing(5)
+        pitch_layout.addWidget(QLabel("音高"), 0, Qt.AlignmentFlag.AlignCenter) # 標題
 
-        self.pitch_slider = QSlider(Qt.Orientation.Vertical)
+        self.pitch_slider = WheelAdjustableSlider(Qt.Orientation.Vertical)
         self.pitch_slider.setRange(-100, 100)
         self.pitch_slider.setValue(self.app.audio.tts_pitch)
         self.pitch_slider.valueChanged.connect(self.app.update_tts_settings)
-
-        pitch_minus_btn = QPushButton("-")
-        pitch_minus_btn.setFixedSize(24, 24)
-        pitch_minus_btn.setObjectName("ToolButton")
-        pitch_minus_btn.clicked.connect(lambda: self.pitch_slider.setValue(self.pitch_slider.value() - 1))
-
-        # --- 核心修正: 簡化佈局，並確保所有元件都置中 ---
-        pitch_layout.addWidget(pitch_plus_btn, 0, Qt.AlignmentFlag.AlignCenter)
-        pitch_layout.addWidget(self.pitch_slider, 1, Qt.AlignmentFlag.AlignCenter) # stretch=1
-        pitch_layout.addWidget(pitch_minus_btn, 0, Qt.AlignmentFlag.AlignCenter)
+        pitch_layout.addWidget(self.pitch_slider, 1) # stretch=1, 移除置中對齊以填滿空間
 
         self.pitch_value_label = QLabel(str(self.app.audio.tts_pitch))
         pitch_layout.addWidget(self.pitch_value_label, 0, Qt.AlignmentFlag.AlignCenter)
         main_layout.addLayout(pitch_layout)
 
         # 讓滑桿卡片有最小高度，以容納垂直滑桿
-        tts_params_frame.setMinimumHeight(250) # 增加高度以容納按鈕
+        tts_params_frame.setMinimumHeight(220) # 移除按鈕後，可以稍微縮小高度
 
         return tts_params_frame
 
