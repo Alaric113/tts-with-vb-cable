@@ -9,6 +9,7 @@ build/
 dist/
 
 ffmpeg/
+audio_cache/
 
 # Inno Setup
 install/
