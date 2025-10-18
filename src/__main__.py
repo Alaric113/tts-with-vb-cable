@@ -96,8 +96,6 @@ def main():
         startupinfo = None
         if is_windows():
             # 為了 PyQt 的樣式，設定環境變數
-            os.environ["QT_FONT_DPI"] = "96"
-
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startupinfo.wShowWindow = subprocess.SW_HIDE

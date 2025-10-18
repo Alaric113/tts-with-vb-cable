@@ -364,6 +364,15 @@ class MainWindow(QMainWindow):
         self.drag_position = QPoint()
         event.accept()
 
+    def changeEvent(self, event):
+        """覆寫 changeEvent 來偵測視窗狀態變化。"""
+        super().changeEvent(event)
+        # 當視窗被啟動 (例如，使用者點擊了它)
+        if event.type() == event.Type.ActivationChange and self.isActiveWindow():
+            # 如果快捷輸入框存在，就關閉它
+            if self.app.quick_input_window:
+                self.app.quick_input_window.close()
+
     def closeEvent(self, event):
         self.app.on_closing()
         event.accept()

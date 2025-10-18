@@ -1,9 +1,9 @@
 {
-    "engine": "edge-tts",
+    "engine": "pyttsx3",
     "voice": "zh-CN-XiaochenNeural",
-    "rate": 250,
+    "rate": 175,
     "volume": 1.0,
-    "hotkey": "<shift>+z",
+    "hotkey": "p",
     "quick_phrases": [
         {
             "text": "123",
@@ -54,6 +54,7 @@
     "listen_volume": 1.0,
     "auto_start_service": true,
     "text_history": [
+        "asasas",
         "456",
         "12",
         "Z123",

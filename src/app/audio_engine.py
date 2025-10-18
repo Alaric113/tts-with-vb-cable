@@ -31,6 +31,7 @@ AudioSegment = None
 
 class AudioEngine:
     def __init__(self, log_callback, status_queue, startupinfo=None):
+        self.app_controller = None # 新增一個參照，用於存取 config
         """
         log(text, level='INFO')
         status_update_queue: A queue to send status updates to the UI thread.
@@ -201,12 +202,31 @@ class AudioEngine:
         return self._edge_voices
 
     # ---------- 合成 ----------
-    async def _synth_edge_to_file(self, text, path):
-        # --- 核心修正: 允許在合成時覆寫聲線 ---
+    async def _synth_edge_to_file(self, text, path, voice_override=None, rate_override=None, pitch_override=None):
+        # 檢查當前選擇的語音是否為自訂語音
+        custom_voices = self.app_controller.config.get("custom_voices", [])
+        custom_voice_data = next((v for v in custom_voices if v["name"] == self.edge_voice), None)
+
         voice = self.edge_voice
-        rate_param = f"{int(round((self.tts_rate - 175) * (40 / 75))):+d}%"
+        rate = self.tts_rate
+        pitch = self.tts_pitch
+
+        # 如果是預覽，則使用覆寫參數
+        if voice_override:
+            voice = voice_override
+            rate = rate_override if rate_override is not None else self.tts_rate
+            pitch = pitch_override if pitch_override is not None else self.tts_pitch
+            custom_voice_data = None # 預覽時不使用自訂語音設定
+
+        # 如果是自訂語音，則使用其內部參數
+        elif custom_voice_data:
+            voice = custom_voice_data["base_voice"]
+            rate = custom_voice_data["rate"]
+            pitch = custom_voice_data["pitch"]
+
+        rate_param = f"{int(round((rate - 175) * (40 / 75))):+d}%"
         volume_param = f"{int((self.tts_volume - 1.0) * 100):+d}%"
-        pitch_param = f"{int(self.tts_pitch):+d}Hz"
+        pitch_param = f"{int(pitch):+d}Hz"
         comm = edge_tts.Communicate(text, voice, rate=rate_param, volume=volume_param, pitch=pitch_param)
         await comm.save(path)
 
@@ -387,28 +407,11 @@ class AudioEngine:
             play_file_path = text if is_cached_play else synth_path
             if not is_cached_play:
                 if self.current_engine == ENGINE_EDGE:
-                    # --- 核心修正: 在試聽時臨時覆寫聲線 ---
-                    original_rate = self.tts_rate
-                    original_volume = self.tts_volume
-                    original_pitch = self.tts_pitch
-                    original_voice = self.edge_voice
-
-                    # --- 增強: 試聽時使用覆寫的參數 ---
-                    if is_preview: # 只有預覽時才覆寫
-                        self.tts_rate = rate_override if rate_override is not None else 175
-                        # 音量暫不提供覆寫，但未來可擴充
-                        self.tts_pitch = pitch_override if pitch_override is not None else 0
-
-                    if voice_override:
-                        self.edge_voice = voice_override
-
-                    loop.run_until_complete(self._synth_edge_to_file(text, play_file_path))
-
-                    # 合成後立即恢復
-                    self.tts_volume = original_volume
-                    self.tts_rate = original_rate
-                    self.tts_pitch = original_pitch
-                    self.edge_voice = original_voice
+                    # 將覆寫參數傳遞給合成函式
+                    loop.run_until_complete(self._synth_edge_to_file(
+                        text, play_file_path,
+                        voice_override=voice_override, rate_override=rate_override, pitch_override=pitch_override
+                    ))
                 else:
                     # pyttsx3 試聽暫不支援覆寫，因其引擎狀態是同步的
                     self._synth_pyttsx3_to_file(text, play_file_path)

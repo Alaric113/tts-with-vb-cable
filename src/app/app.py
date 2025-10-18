@@ -158,6 +158,9 @@ class LocalTTSPlayer(QObject):
         self.signals.show_messagebox_signal.connect(self._show_messagebox_slot, Qt.ConnectionType.QueuedConnection)
         self.signals.show_quick_input_signal.connect(self._show_quick_input_slot, Qt.ConnectionType.QueuedConnection)
 
+        # --- 核心修正: 監聽全域焦點變化以關閉快捷輸入框 ---
+        QApplication.instance().focusChanged.connect(self.on_global_focus_changed)
+
     # ===================== Log 與進度 =====================
     def log_message(self, msg, level="INFO", mode="append"):
         """安全地記錄訊息，即使在 UI 建立之前。"""
@@ -548,12 +551,13 @@ class LocalTTSPlayer(QObject):
         normal_keys = sorted([p for p in parts if not (p.startswith('<') and p.endswith('>'))])
         return "+".join(modifiers + normal_keys)
 
-    def _check_hotkey_conflict(self, new_hotkey, exclude_type, exclude_index=None):
+    def _check_hotkey_conflict(self, new_hotkey, exclude_type, exclude_index=None, phrases_to_check=None):
         """
         檢查新的快捷鍵是否與現有的衝突。
         :param new_hotkey: 要檢查的快捷鍵字串。
         :param exclude_type: 'main' 或 'quick_phrase'，表示當前正在編輯哪種類型的快捷鍵。
         :param exclude_index: 如果是 'quick_phrase'，則是要排除的索引。
+        :param phrases_to_check: (可選) 傳入一個快捷語音列表進行檢查，預設使用 self.quick_phrases。
         :return: 衝突訊息字串，或 None (無衝突)。
         """
         if not new_hotkey:
@@ -564,12 +568,28 @@ class LocalTTSPlayer(QObject):
             return f"與主快捷鍵 '{self.current_hotkey}' 衝突。"
 
         # 檢查與快捷語音的衝突
-        for i, phrase in enumerate(self.quick_phrases):
+        phrase_list = phrases_to_check if phrases_to_check is not None else self.quick_phrases
+        for i, phrase in enumerate(phrase_list):
             if exclude_type == 'quick_phrase' and i == exclude_index:
                 continue
             if phrase.get("hotkey") == new_hotkey:
                 return f"與快捷語音 {i + 1} ('{phrase.get('text', '')[:10]}...') 的快捷鍵衝突。"
         return None
+
+    def on_global_focus_changed(self, old_widget, new_widget):
+        """
+        監聽全域焦點變化。當焦點從快捷輸入框轉移到應用程式外部時，
+        關閉快捷輸入框。
+        """
+        # 檢查快捷輸入框是否存在且可見
+        if self.quick_input_window and self.quick_input_window.isVisible():
+            # `new_widget` 為 None 表示焦點轉移到了此應用程式之外
+            if new_widget is None:
+                # 檢查舊焦點是否在快捷輸入框內
+                is_child = self.quick_input_window.isAncestorOf(old_widget) if old_widget else False
+                if old_widget == self.quick_input_window or is_child:
+                    self.log_message("快捷輸入框因失去焦點而關閉。", "DEBUG")
+                    self.quick_input_window.close()
 
     # ===================== 快速輸入框 =====================
     def _show_quick_input(self):
@@ -579,45 +599,50 @@ class LocalTTSPlayer(QObject):
     def _show_quick_input_slot(self):
         """在主執行緒中建立並顯示快速輸入框的槽函式。"""
         if not self._input_window_lock.acquire(blocking=False):
+            self.log_message("無法獲取輸入視窗鎖，可能已有視窗正在開啟。", "DEBUG")
             return
-        if self.quick_input_window and self.quick_input_window.isVisible():
-            self.quick_input_window.activateWindow()
-            self.quick_input_window.raise_()
-            if self._input_window_lock.locked():
-                self._input_window_lock.release()
-            return
-        
-        # 延遲匯入以避免循環依賴
-        from ..ui.popups import QuickInputWindow
-        
-        win = QuickInputWindow(self)
-        self.quick_input_window = win
 
-        screen = QApplication.primaryScreen().geometry()
-        screen_w, screen_h = screen.width(), screen.height()
-        w, h = 420, 42
+        try:
+            # --- 核心修正: 修正縮排與邏輯 ---
+            if self.quick_input_window: # 檢查參照是否存在
+                # 如果視窗已存在，只需將其帶到最前
+                self.log_message("偵測到現有輸入視窗，將其帶到最前。", "DEBUG")
+                self.quick_input_window.show()
+                self.quick_input_window.activateWindow()
+                self.quick_input_window.raise_()
+            else:
+                # 如果視窗不存在，則建立新視窗
+                self.log_message("建立新的輸入視窗。", "DEBUG")
+                # 延遲匯入以避免循環依賴
+                from ..ui.popups import QuickInputWindow
+                
+                win = QuickInputWindow(self, parent=self.main_window)
+                self.quick_input_window = win # 在顯示前就設定好參照
 
-        pos = self.quick_input_position
-        if pos == "center":
-            x = (screen_w - w) // 2; y = (screen_h - h) // 2
-        elif pos == "top-left":
-            x = 20; y = 40
-        elif pos == "top-right":
-            x = screen_w - w - 20; y = 40
-        elif pos == "bottom-left":
-            x = 20; y = screen_h - h - 40
-        else: # bottom-right
-            x = screen_w - w - 20; y = screen_h - h - 40
+                screen = QApplication.primaryScreen().geometry()
+                screen_w, screen_h = screen.width(), screen.height()
+                w, h = 420, 42
 
-        win.setGeometry(x, y, w, h)
-        win.show()
-        win.activateWindow()
-        win.raise_()
+                pos = self.quick_input_position
+                if pos == "center":
+                    x = (screen_w - w) // 2; y = (screen_h - h) // 2
+                elif pos == "top-left":
+                    x = 20; y = 40
+                elif pos == "top-right":
+                    x = screen_w - w - 20; y = 40
+                elif pos == "bottom-left":
+                    x = 20; y = screen_h - h - 40
+                else: # bottom-right
+                    x = screen_w - w - 20; y = screen_h - h - 40
 
-    def release_input_window_lock(self):
-        if self._input_window_lock.locked():
+                win.setGeometry(x, y, w, h)
+                win.show()
+                win.activateWindow()
+                win.raise_()
+        finally:
+            # 確保鎖總是被釋放
             self._input_window_lock.release()
-
+            self.log_message("已釋放輸入視窗鎖。", "DEBUG")
     def handle_quick_input_history(self, entry, key):
         if not self.text_history:
             return
@@ -650,7 +675,7 @@ class LocalTTSPlayer(QObject):
                 self.text_history.appendleft(text)
                 self.config.set("text_history", list(self.text_history))
                 self.audio.play_text(text)
-            self.quick_input_window.close()
+            self.quick_input_window.close_window()
 
     # ===================== 設定視窗 & 快捷語音 =====================
     def _open_settings_window(self):
