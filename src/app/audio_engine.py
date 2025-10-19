@@ -97,15 +97,21 @@ class AudioEngine:
 
     # ---------- 初始化 & 資源 ----------
     def init_pyttsx3(self):
+        """
+        僅檢查 pyttsx3 模組是否存在並載入可用語音列表。
+        不再在此處初始化引擎實例，以避免跨執行緒問題。
+        """
         global pyttsx3
         if pyttsx3 is None:
             try:
                 import pyttsx3
             except ImportError:
                 self.log("缺少 'pyttsx3' 模組，相關功能將無法使用。", "ERROR")
-        if not self._pyttsx3_engine:
-            self._pyttsx3_engine = pyttsx3.init()
-            self._pyttsx3_voices = self._pyttsx3_engine.getProperty("voices")
+                return
+        # 為了獲取語音列表，我們需要一個臨時引擎
+        temp_engine = pyttsx3.init()
+        self._pyttsx3_voices = temp_engine.getProperty("voices")
+        temp_engine.stop() # 獲取後立即銷毀
 
     async def load_edge_voices(self):
         try:
@@ -231,15 +237,27 @@ class AudioEngine:
         await comm.save(path)
 
     def _synth_pyttsx3_to_file(self, text, path):
-        if not self._pyttsx3_engine:
-            self.log("pyttsx3 引擎未初始化。", "ERROR")
-            raise RuntimeError("pyttsx3 engine not initialized.") # type: ignore
-        self._pyttsx3_engine.setProperty("rate", self.tts_rate)
-        self._pyttsx3_engine.setProperty("volume", self.tts_volume)
-        if self.pyttsx3_voice_id:
-            self._pyttsx3_engine.setProperty("voice", self.pyttsx3_voice_id)
-        self._pyttsx3_engine.save_to_file(text, path)
-        self._pyttsx3_engine.runAndWait()
+        """
+        在音訊工作執行緒中即時建立、使用並銷毀 pyttsx3 引擎。
+        這是最可靠的方式，可以從根本上避免多執行緒衝突。
+        """
+        global pyttsx3
+        if pyttsx3 is None:
+            self.log("pyttsx3 模組未載入，無法合成。", "ERROR")
+            return
+
+        engine = None
+        try:
+            engine = pyttsx3.init()
+            engine.setProperty("rate", self.tts_rate)
+            engine.setProperty("volume", self.tts_volume)
+            if self.pyttsx3_voice_id:
+                engine.setProperty("voice", self.pyttsx3_voice_id)
+            engine.save_to_file(text, path)
+            engine.runAndWait()
+        finally:
+            if engine:
+                engine.stop() # 確保引擎被銷毀
 
     # ---------- 播放 ----------
     def _animate_playback(self, text, stop_event):

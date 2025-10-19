@@ -3,7 +3,7 @@
     "voice": "zh-CN-XiaochenNeural",
     "rate": 175,
     "volume": 1.0,
-    "hotkey": "p",
+    "hotkey": "`",
     "quick_phrases": [
         {
             "text": "123",
@@ -54,13 +54,14 @@
     "listen_volume": 1.0,
     "auto_start_service": true,
     "text_history": [
-        "asasas",
         "456",
+        "123",
+        "11",
         "12",
+        "asasas",
         "Z123",
         "喵",
         "你好",
-        "123",
         "ㄑ",
         "321",
         "Z1",

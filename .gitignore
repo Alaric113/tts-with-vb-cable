@@ -31,6 +31,8 @@ env/
 # Windows
 Thumbs.db
 
+
+config.json
 # macOS
 .DS_Store
 

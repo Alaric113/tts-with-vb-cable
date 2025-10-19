@@ -54,8 +54,8 @@ class AppSignals(QObject):
     audio_status = pyqtSignal(str, str, str)
     update_ui_after_load = pyqtSignal()
     prompt_vbcable_setup = pyqtSignal(str)
-    check_for_updates = pyqtSignal(bool)
-    show_messagebox_signal = pyqtSignal(str, str, str, object) # 新增 object 用於傳遞 callback
+    check_for_updates = pyqtSignal(bool) # title, message, type, callback_or_event
+    show_messagebox_signal = pyqtSignal(str, str, str, object)
     show_quick_input_signal = pyqtSignal()
 
 class LocalTTSPlayer(QObject):
@@ -177,6 +177,10 @@ class LocalTTSPlayer(QObject):
 
     def _log_message_slot(self, formatted_msg, level, mode):
         """在主執行緒中更新日誌 UI 的槽函數。"""
+        # --- 核心修正: 過濾 DEBUG 等級的日誌，使其不在 UI 上顯示 ---
+        if level.upper() == 'DEBUG':
+            return
+
         log_widget = self.main_window.log_text
         cursor = log_widget.textCursor()
 
@@ -191,12 +195,25 @@ class LocalTTSPlayer(QObject):
         else:
             log_widget.append(formatted_msg)
 
-    def show_messagebox(self, title, message, msg_type="info", callback=None):
-        """安全地從任何執行緒顯示訊息框。"""
-        # 發射信號，讓主執行緒來處理 UI 操作
-        self.signals.show_messagebox_signal.emit(title, message, msg_type, callback)
-        # 注意：由於非同步，此函式無法再返回值
+    def show_messagebox(self, title, message, msg_type="info", callback_or_event=None):
+        """
+        安全地從任何執行緒顯示訊息框。
+        - 如果傳入 callback，則為非同步呼叫。
+        - 如果傳入 (threading.Event, list)，則為同步呼叫，會阻塞直到使用者回應。
+        """
+        # 檢查是否為同步呼叫
+        is_sync_call = isinstance(callback_or_event, tuple) and len(callback_or_event) == 2 and isinstance(callback_or_event[0], threading.Event)
 
+        self.signals.show_messagebox_signal.emit(title, message, msg_type, callback_or_event)
+
+        if is_sync_call:
+            event, result_container = callback_or_event
+            # 等待 UI 執行緒設定事件
+            event.wait()
+            # 從容器中取得結果
+            return result_container[0] if result_container else False
+        return None # 非同步呼叫沒有返回值
+        
     def _show_messagebox_slot(self, title, message, msg_type, callback):
         """在主執行緒中安全地顯示訊息框的槽函式。"""
         msg_box = QMessageBox(self.main_window)
@@ -215,7 +232,17 @@ class LocalTTSPlayer(QObject):
             msg_box.setIcon(QMessageBox.Icon.Question)
             msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             result = msg_box.exec()
-            if callback:
+            user_choice = (result == QMessageBox.StandardButton.Yes)
+
+            # 根據 callback 的類型決定是同步還是非同步
+            is_sync_call = isinstance(callback, tuple) and len(callback) == 2 and isinstance(callback[0], threading.Event)
+            if is_sync_call:
+                # 同步模式：將結果存入容器並設定事件
+                event, result_container = callback
+                result_container.append(user_choice)
+                event.set()
+            elif callable(callback):
+                # 非同步模式：直接呼叫回呼函式
                 callback(result == QMessageBox.StandardButton.Yes)
 
     # ===================== 依賴流程 =====================
@@ -227,8 +254,15 @@ class LocalTTSPlayer(QObject):
         dm = DependencyManager(
             log=lambda msg, level="INFO": self.log_message(msg, level),
             status=lambda icon, msg, level="INFO": self.signals.audio_status.emit(level, icon, msg),
-            # 將 startupinfo 傳遞給依賴管理器
-            ask_yes_no=lambda t, m, cb: self.show_messagebox(t, m, "yesno", cb), 
+            # --- 核心修正: 提供同步和非同步兩種提問方式 ---
+            ask_yes_no_sync=lambda title, msg: self.show_messagebox(
+                title, msg, "yesno",
+                # 傳入一個 (Event, 容器) 元組來觸發同步模式
+                (threading.Event(), [])
+            ),
+            ask_yes_no_async=lambda title, msg, cb: self.show_messagebox(
+                title, msg, "yesno", cb
+            ),
             show_info=lambda t, m: self.show_messagebox(t, m, "info"),
             show_error=lambda t, m: self.show_messagebox(t, m, "error"),
             startupinfo=self.startupinfo

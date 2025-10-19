@@ -40,7 +40,7 @@ CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 CACHE_DIR = os.path.join(BASE_DIR, "audio_cache")
 
 # --- 應用程式版本與更新資訊 ---
-APP_VERSION = "1.2.1"  # 您可以根據您的版本進度修改此處
+APP_VERSION = "1.2.3"  # 您可以根據您的版本進度修改此處
 GITHUB_REPO = "Alaric113/tts-with-vb-cable" # !! 請務必將 YOUR_USERNAME 替換成您的 GitHub 使用者名稱 !!
 
 CABLE_OUTPUT_HINT = "CABLE Input"
@@ -194,17 +194,19 @@ def extract_ffmpeg_zip(zip_path: str, target_bin_dir: str, progress_cb=None, sta
 
 # ================= 依賴處理（以回呼解耦 UI） =================
 class DependencyManager:
-    def __init__(self, log, status, ask_yes_no, show_info, show_error, startupinfo=None):
+    def __init__(self, log, status, ask_yes_no_sync, ask_yes_no_async, show_info, show_error, startupinfo=None):
         """
         log(text, level='INFO')
         status(icon_text, message, level='INFO')
-        ask_yes_no(title, message, callback)
+        ask_yes_no_sync(title, message) -> bool
+        ask_yes_no_async(title, message, callback)
         show_info(title, message)
         show_error(title, message)
         """
         self.log = log
         self.status = status
-        self.ask_yes_no = ask_yes_no
+        self.ask_yes_no_sync = ask_yes_no_sync
+        self.ask_yes_no_async = ask_yes_no_async
         self.show_info = show_info
         self.show_error = show_error
         self.startupinfo = startupinfo
@@ -225,53 +227,53 @@ class DependencyManager:
             prepend_env_path(FFMPEG_BIN_DIR)
             return True
 
-        def on_user_choice(do_install):
-            if not do_install:
-                self.log("使用者取消下載，依賴檢查未完成。", "WARN")
-                self.show_error("錯誤", "缺少 ffmpeg/ffprobe，無法進行音訊轉檔/探測。")
-                return # 返回 False 的等效操作
-
-            try:
-                ensure_dir(FFMPEG_BIN_DIR)
-                with tempfile.TemporaryDirectory(prefix="ffdl_") as temp_download_dir:
-                    ok = False
-                    last_err = None
-                    for src in FFMPEG_DOWNLOAD_SOURCES:
-                        try:
-                            tmp_zip = os.path.join(temp_download_dir, f"{src['name']}.zip")
-                            self.status("[↓]", f"準備從 {src['name']} 下載 ffmpeg…", "INFO")
-                            download_with_progress(
-                                src["url"], tmp_zip,
-                                progress_cb=lambda p, t: self.status("[↓]", t, "INFO")
-                            )
-                            self.status("[ unpacking ]", "下載完成，準備解壓…", "INFO")
-                            extract_ffmpeg_zip(
-                                tmp_zip, FFMPEG_BIN_DIR,
-                                progress_cb=lambda p, t: self.status("[ unpacking ]", t, "INFO"),
-                                status_cb=lambda t: self.log(t)
-                            )
-                            if has_bundled_ffmpeg() and ffmpeg_version_ok(FFMPEG_EXE, self.startupinfo):
-                                ok = True
-                                break
-                        except Exception as e:
-                            last_err = e
-                            self.log(f"來源 {src['name']} 失敗：{e}", "WARN")
-                            continue
-                    if not ok:
-                        if last_err:
-                            raise last_err
-                        raise RuntimeError("無法從預設來源下載/解壓 ffmpeg。")
-                prepend_env_path(FFMPEG_BIN_DIR)
-                self.status("[✔]", f"ffmpeg 已成功安裝至 {FFMPEG_BIN_DIR}", "INFO")
-                self.show_info("完成", "ffmpeg/ffprobe 已安裝到本地 ffmpeg/bin。")
-                # 返回 True 的等效操作，但因為在 callback 中，所以這裡只是結束
-            except Exception as e:
-                self.log(f"安裝 ffmpeg 失敗：{e}", "ERROR")
-                self.show_error("錯誤", f"安裝 ffmpeg 失敗：{e}")
-
         self.status("[!]", "未找到 ffmpeg/ffprobe，需要使用者操作。", "WARN")
-        self.ask_yes_no("依賴安裝助手", "未找到 ffmpeg/ffprobe。\n是否自動下載並安裝到本地 ffmpeg/bin？", on_user_choice)
-        return True # 假設會成功，讓主流程繼續，實際結果由 callback 處理
+        # --- 核心修正: 使用同步提問，並在本執行緒中處理下載 ---
+        do_install = self.ask_yes_no_sync("依賴安裝助手", "未找到 ffmpeg/ffprobe。\n是否自動下載並安裝到本地 ffmpeg/bin？")
+
+        if not do_install:
+            self.log("使用者取消下載，依賴檢查未完成。", "WARN")
+            self.show_error("錯誤", "缺少 ffmpeg/ffprobe，無法進行音訊轉檔/探測。")
+            return False
+
+        try:
+            ensure_dir(FFMPEG_BIN_DIR)
+            with tempfile.TemporaryDirectory(prefix="ffdl_") as temp_download_dir:
+                ok = False
+                last_err = None
+                for src in FFMPEG_DOWNLOAD_SOURCES:
+                    try:
+                        tmp_zip = os.path.join(temp_download_dir, f"{src['name']}.zip")
+                        self.status("[↓]", f"準備從 {src['name']} 下載 ffmpeg…", "INFO")
+                        download_with_progress(
+                            src["url"], tmp_zip,
+                            progress_cb=lambda p, t: self.status("[↓]", t, "INFO")
+                        )
+                        self.status("[ unpacking ]", "下載完成，準備解壓…", "INFO")
+                        extract_ffmpeg_zip(
+                            tmp_zip, FFMPEG_BIN_DIR,
+                            progress_cb=lambda p, t: self.status("[ unpacking ]", t, "INFO"),
+                            status_cb=lambda t: self.log(t)
+                        )
+                        if has_bundled_ffmpeg() and ffmpeg_version_ok(FFMPEG_EXE, self.startupinfo):
+                            ok = True
+                            break
+                    except Exception as e:
+                        last_err = e
+                        self.log(f"來源 {src['name']} 失敗：{e}", "WARN")
+                        continue
+                if not ok:
+                    if last_err:
+                        raise last_err
+                    raise RuntimeError("無法從預設來源下載/解壓 ffmpeg。")
+            prepend_env_path(FFMPEG_BIN_DIR)
+            self.status("[✔]", f"ffmpeg 已成功安裝至 {FFMPEG_BIN_DIR}", "INFO")
+            self.show_info("完成", "ffmpeg/ffprobe 已安裝到本地 ffmpeg/bin。")
+            return True
+        except Exception as e:
+            self.log(f"安裝 ffmpeg 失敗：{e}", "ERROR")
+            self.show_error("錯誤", f"安裝 ffmpeg 失敗：{e}")
+            return False
 
     # ---- VB-CABLE （純流程與檔案處理，執行安裝仍交還 UI） ----
     def need_install_vbcable(self, list_devices_func) -> bool:
@@ -337,4 +339,4 @@ class DependencyManager:
                 self.log(f"下載或解壓縮 VB-CABLE 失敗: {e}", "ERROR")
                 self.show_error("錯誤", f"下載 VB-CABLE 失敗: {e}")
 
-        self.ask_yes_no("VB-CABLE 安裝助手", "未偵測到 VB-CABLE 驅動，且找不到安裝程式。\n\n是否要從官方網站自動下載 VB-CABLE 安裝包？", on_user_choice)
+        self.ask_yes_no_async("VB-CABLE 安裝助手", "未偵測到 VB-CABLE 驅動，且找不到安裝程式。\n\n是否要從官方網站自動下載 VB-CABLE 安裝包？", on_user_choice)
