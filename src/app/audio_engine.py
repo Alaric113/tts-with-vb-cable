@@ -19,15 +19,20 @@ from datetime import datetime
 import subprocess
 import queue
 import hashlib
-import edge_tts
 
 from ..utils.deps import (
-    DEFAULT_EDGE_VOICE, ENGINE_EDGE, ENGINE_PYTTX3, CABLE_INPUT_HINT
+    DEFAULT_EDGE_VOICE, ENGINE_EDGE, ENGINE_PYTTX3, ENGINE_KOKORO, CABLE_INPUT_HINT
 )
 
 # 延遲匯入，避免在 ffmpeg 路徑設定前就發出警告
 pyttsx3 = None
 AudioSegment = None
+
+# --- 新增: 延遲匯入 kokoro ---
+KOKORO_PIPELINE = None # 儲存 KPipeline 實例
+KOKORO_VOICES = {}
+KOKORO_VOICES_LOADED = False
+# -----------------------------
 
 class AudioEngine:
     def __init__(self, log_callback, status_queue, startupinfo=None):
@@ -41,7 +46,7 @@ class AudioEngine:
         self.startupinfo = startupinfo
 
         self.current_engine = ENGINE_EDGE
-        self.edge_voice = DEFAULT_EDGE_VOICE
+        self.current_voice = DEFAULT_EDGE_VOICE
         self.pyttsx3_voice_id = None
 
         self.tts_rate = 175
@@ -113,7 +118,35 @@ class AudioEngine:
         self._pyttsx3_voices = temp_engine.getProperty("voices")
         temp_engine.stop() # 獲取後立即銷毀
 
+    def init_kokoro(self):
+        """載入 kokoro 引擎與 misaki 中文語音。"""
+        global KOKORO_PIPELINE, KOKORO_VOICES, KOKORO_VOICES_LOADED
+        if KOKORO_VOICES_LOADED:
+            return
+        try:
+            # --- 最終核心修正: 使用 KPipeline API ---
+            from kokoro import KPipeline
+            # 實例化 KPipeline，lang_code='zh' 表示只載入中文相關模型
+            pipeline = KPipeline(lang_code='zh')
+            KOKORO_PIPELINE = pipeline
+            # 從 pipeline 物件的 voices 屬性獲取語音列表
+            # 它是一個字典，鍵是 speaker 名稱，值是 speaker ID
+            KOKORO_VOICES = pipeline.voices
+            # --- 核心修正: 檢查語音列表是否為空 ---
+            if not KOKORO_VOICES:
+                self.log("kokoro 引擎已載入，但未找到任何語音模型。", "WARN")
+                self.log("請確認 'misaki[zh]' 已正確安裝: pip install -q \"misaki[zh]>=0.8.2\"", "WARN")
+                # 即使列表為空，也標記為已載入，避免重複嘗試
+            KOKORO_VOICES_LOADED = True
+            self.log("成功載入 kokoro 引擎與 misaki[zh] 語音。", "INFO")
+        except ImportError:
+            self.log("缺少 'kokoro' 或 'misaki[zh]' 模組，相關功能將無法使用。", "ERROR")
+            self.log("請執行: pip install -q kokoro>=0.8.2 \"misaki[zh]>=0.8.2\"", "ERROR")
+
     async def load_edge_voices(self):
+        # --- 核心修正: 延遲匯入 edge_tts ---
+        import edge_tts
+
         try:
             vm = await edge_tts.VoicesManager.create()
             self._edge_voices = [v for v in vm.voices if v.get("Locale", "").startswith("zh-")]
@@ -167,8 +200,8 @@ class AudioEngine:
     def set_engine(self, engine: str):
         self.current_engine = engine
 
-    def set_edge_voice(self, short_name: str):
-        self.edge_voice = short_name or DEFAULT_EDGE_VOICE
+    def set_current_voice(self, voice_name: str):
+        self.current_voice = voice_name or DEFAULT_EDGE_VOICE
 
     def set_pyttsx3_voice_by_name(self, name: str):
         if not self._pyttsx3_voices:
@@ -195,6 +228,8 @@ class AudioEngine:
     def get_voice_names(self):
         if self.current_engine == ENGINE_EDGE:
             return [DEFAULT_EDGE_VOICE] + [v["ShortName"] for v in self._edge_voices]
+        elif self.current_engine == ENGINE_KOKORO:
+            return list(KOKORO_VOICES.keys()) if KOKORO_VOICES else ["default"]
         else:
             return [v.name for v in self._pyttsx3_voices] if self._pyttsx3_voices else ["default"]
 
@@ -209,11 +244,14 @@ class AudioEngine:
 
     # ---------- 合成 ----------
     async def _synth_edge_to_file(self, text, path, voice_override=None, rate_override=None, pitch_override=None):
-        # 檢查當前選擇的語音是否為自訂語音
-        custom_voices = self.app_controller.config.get("custom_voices", [])
-        custom_voice_data = next((v for v in custom_voices if v["name"] == self.edge_voice), None)
+        # --- 核心修正: 延遲匯入 edge_tts ---
+        import edge_tts
 
-        voice = self.edge_voice
+        # 檢查當前選擇的語音是否為自訂語音
+        custom_voices = self.app_controller.config.get("custom_voices", []) if self.app_controller else []
+        custom_voice_data = next((v for v in custom_voices if v["name"] == self.current_voice), None)
+
+        voice = self.current_voice
         rate = self.tts_rate
         pitch = self.tts_pitch
 
@@ -235,8 +273,9 @@ class AudioEngine:
         pitch_param = f"{int(pitch):+d}Hz"
         comm = edge_tts.Communicate(text, voice, rate=rate_param, volume=volume_param, pitch=pitch_param)
         await comm.save(path)
+        return True
 
-    def _synth_pyttsx3_to_file(self, text, path):
+    def _synth_pyttsx3_to_file(self, text, path) -> bool:
         """
         在音訊工作執行緒中即時建立、使用並銷毀 pyttsx3 引擎。
         這是最可靠的方式，可以從根本上避免多執行緒衝突。
@@ -244,7 +283,7 @@ class AudioEngine:
         global pyttsx3
         if pyttsx3 is None:
             self.log("pyttsx3 模組未載入，無法合成。", "ERROR")
-            return
+            return False
 
         engine = None
         try:
@@ -255,9 +294,47 @@ class AudioEngine:
                 engine.setProperty("voice", self.pyttsx3_voice_id)
             engine.save_to_file(text, path)
             engine.runAndWait()
+            return True
         finally:
             if engine:
                 engine.stop() # 確保引擎被銷毀
+
+    def _synth_kokoro_to_file(self, text, path, voice_override=None) -> bool:
+        """使用 kokoro 引擎合成語音並存檔。"""
+        if not KOKORO_PIPELINE:
+            self.log("kokoro 引擎未初始化，無法合成。", "ERROR")
+            # --- 核心修正: 回傳 False 表示合成失敗 ---
+            return False
+
+        try:
+            # --- 核心修正: 確保 speaker_to_use 永遠有效 ---
+            # 1. 優先使用函式傳入的覆寫值 (用於試聽)。
+            # 2. 其次使用 self.current_voice，它儲存了使用者在 UI 上的選擇。
+            # 3. 如果 self.current_voice 在 kokoro 的語音列表中不存在 (例如剛從 edge-tts 切換過來)，
+            #    則安全地選擇 kokoro 列表中的第一個語音作為預設值。
+            speaker_to_use = voice_override or self.current_voice
+            if not speaker_to_use or speaker_to_use not in KOKORO_VOICES:
+                speaker_to_use = list(KOKORO_VOICES.keys())[0] if KOKORO_VOICES else None
+            if not speaker_to_use:
+                raise ValueError("Kokoro 語音列表為空，無法合成。")
+
+            # --- 核心修正: 移除 speed 參數，使用 kokoro 預設值 ---
+            # 避免因參數範圍錯誤導致底層崩潰
+            
+            # --- 最終核心修正: 呼叫 pipeline 物件進行合成 ---
+            # KPipeline 的 __call__ 方法是一個生成器，我們只需要第一個結果
+            generator = KOKORO_PIPELINE(text, voice=speaker_to_use)
+            _, _, audio_data = next(generator)
+
+            # 將音訊資料寫入檔案
+            import soundfile as sf
+            # kokoro 預設輸出取樣率為 24000
+            sf.write(path, audio_data, 24000)
+            return True
+
+        except Exception as e:
+            self.log(f"Kokoro 合成失敗: {e}", "ERROR")
+            return False
 
     # ---------- 播放 ----------
     def _animate_playback(self, text, stop_event):
@@ -334,7 +411,7 @@ class AudioEngine:
             return
 
         # 根據當前設定產生目標快取路徑
-        cache_path = self._get_cache_path(text, self.current_engine, self.edge_voice if self.current_engine == ENGINE_EDGE else self.pyttsx3_voice_id, self.tts_rate, self.tts_pitch)
+        cache_path = self._get_cache_path(text, self.current_engine, self.current_voice, self.tts_rate, self.tts_pitch)
         
         # 如果快取已存在，則無需重新生成
         if os.path.exists(cache_path):
@@ -350,6 +427,9 @@ class AudioEngine:
                     audio = AudioSegment.from_mp3(tmp_mp3.name)
                     audio.export(cache_path, format="wav")
                 os.remove(tmp_mp3.name)
+            elif self.current_engine == ENGINE_KOKORO:
+                # Kokoro 直接生成 WAV
+                self._synth_kokoro_to_file(text, cache_path)
             else: # pyttsx3
                 self._synth_pyttsx3_to_file(text, cache_path)
             self.log(f"快取建立成功: {os.path.basename(cache_path)}", "INFO")
@@ -407,11 +487,14 @@ class AudioEngine:
         # 根據播放類型決定顯示的文字
         display_text = original_text_for_cache if is_cached_play else text
 
+        # --- 檢查點 1: 開始處理 ---
+        self.log(f"Worker: Starting to process text: '{display_text[:30]}...'", "DEBUG")
+
         animation_thread = threading.Thread(
             target=self._animate_playback, args=(display_text, animation_stop_event), daemon=True
         )
         synth_suffix = ".mp3" if self.current_engine == ENGINE_EDGE else ".wav"
-        fd, synth_path = tempfile.mkstemp(suffix=synth_suffix)
+        fd, synth_path = tempfile.mkstemp(suffix=synth_suffix, prefix="tts_")
         os.close(fd)
 
         animation_thread.start()
@@ -424,16 +507,26 @@ class AudioEngine:
             # 如果是快取播放，直接使用該路徑；否則，即時合成
             play_file_path = text if is_cached_play else synth_path
             if not is_cached_play:
+                synthesis_success = False
                 if self.current_engine == ENGINE_EDGE:
                     # 將覆寫參數傳遞給合成函式
-                    loop.run_until_complete(self._synth_edge_to_file(
+                    synthesis_success = loop.run_until_complete(self._synth_edge_to_file(
                         text, play_file_path,
                         voice_override=voice_override, rate_override=rate_override, pitch_override=pitch_override
                     ))
+                elif self.current_engine == ENGINE_KOKORO:
+                    synthesis_success = self._synth_kokoro_to_file(text, play_file_path, voice_override=voice_override)
                 else:
                     # pyttsx3 試聽暫不支援覆寫，因其引擎狀態是同步的
-                    self._synth_pyttsx3_to_file(text, play_file_path)
+                    synthesis_success = self._synth_pyttsx3_to_file(text, play_file_path)
 
+                # --- 核心修正: 檢查合成是否成功 ---
+                if not synthesis_success:
+                    self.log(f"Worker: Synthesis failed for text '{display_text[:30]}...'. Aborting playback.", "ERROR")
+                    # 不需要再記錄一次錯誤，因為合成函式內部已經記錄過了
+                    # self.status_queue.put(("PLAY", "[❌]", f"合成失敗: {display_text[:20]}..."))
+                    return # 直接中止後續流程
+                    
             # --- 清理: 移除本地猴子補丁，現在由全域的 runtime_hook 處理 ---
             audio = AudioSegment.from_file(play_file_path)
 
@@ -470,6 +563,9 @@ class AudioEngine:
                     listen_sr = int(audio.frame_rate)
                     listen_max_ch = 2
 
+            # --- 檢查點 5: 播放設定後，實際播放前 ---
+            self.log(f"Worker: Playback setup complete. Main Dev: {main_device_id}, Listen Dev: {listen_device_id}", "DEBUG")
+
             # --- 核心修正: 重新組織播放邏輯 ---
             # 1. 純預覽模式 (未啟用聆聽自己)
             if is_preview and not self.enable_listen_to_self:
@@ -478,22 +574,8 @@ class AudioEngine:
 
             # 2. 單設備播放模式 (主設備播放，且未啟用聆聽)
             if not is_preview and not self.enable_listen_to_self:
-                self._play_to_single_device(audio, main_sr, main_device_id, main_max_ch, 1.0, display_text)
-                target_sr = main_sr
-                audio_play = self._resample_audio_segment(audio, target_sr) if int(audio.frame_rate) != int(target_sr) else audio
-                samples = self._audiosegment_to_float32_numpy(audio_play)
-                if samples.ndim == 1 and main_max_ch >= 2:
-                    samples = np.column_stack((samples, samples))
-                try:
-                    sd.play(samples, samplerate=target_sr, device=main_device_id)
-                    sd.wait()
-                    self.status_queue.put(("PLAY", "[✔]", f"播放完畢: {display_text[:20]}..."))
-                except Exception as e:
-                    self.log(f"播放到主設備失敗: {e}", "ERROR")
-                finally:
-                    try: sd.stop()
-                    except Exception: pass
-                    return
+                self._play_to_single_device(audio, main_sr, main_device_id, main_max_ch, 1.0, display_text, is_preview=False)
+                return # 播放完成後直接返回
             
             # 3. 雙設備並行播放模式 (主設備 + 聆聽設備)
             if int(audio.frame_rate) != int(main_sr):

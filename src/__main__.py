@@ -7,7 +7,7 @@
 
 import sys
 import os
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QApplication, QMessageBox, QPlainTextEdit
 from PyQt6.QtCore import Qt
 
 import traceback
@@ -15,7 +15,7 @@ import subprocess
 import ctypes
 
 # Core application import using relative path
-from .app.app import LocalTTSPlayer
+from .app.app import LocalTTSPlayer, AppSignals
 
 try:
     import comtypes # noqa: F401

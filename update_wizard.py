@@ -141,7 +141,6 @@ class UpdateWizard:
                     total_size = int(r.headers.get('content-length', 0))
                     downloaded_size = 0
                     with open(zip_path, 'wb') as f:
-                        for chunk in r.iter_content(chunk_size=8192):
                         # --- 核心修正: 增加 chunk_size 以大幅提升下載速度 ---
                         for chunk in r.iter_content(chunk_size=1024 * 512): # 512 KB
                             f.write(chunk)

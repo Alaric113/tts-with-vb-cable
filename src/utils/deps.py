@@ -18,6 +18,7 @@ import tempfile
 import time
 import subprocess
 import urllib.request
+import requests
 
 IS_WINDOWS = sys.platform.startswith("win")
 
@@ -40,7 +41,7 @@ CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 CACHE_DIR = os.path.join(BASE_DIR, "audio_cache")
 
 # --- 應用程式版本與更新資訊 ---
-APP_VERSION = "1.2.3"  # 您可以根據您的版本進度修改此處
+APP_VERSION = "1.2.4"  # 您可以根據您的版本進度修改此處
 GITHUB_REPO = "Alaric113/tts-with-vb-cable" # !! 請務必將 YOUR_USERNAME 替換成您的 GitHub 使用者名稱 !!
 
 CABLE_OUTPUT_HINT = "CABLE Input"
@@ -51,6 +52,7 @@ VB_CABLE_DOWNLOAD_URL = "https://download.vb-audio.com/Download_CABLE/VBCABLE_Dr
 DEFAULT_EDGE_VOICE = "zh-CN-XiaoxiaoNeural"
 ENGINE_EDGE   = "edge-tts"
 ENGINE_PYTTX3 = "pyttsx3"
+ENGINE_KOKORO = "kokoro"
 
 FFMPEG_DIR = os.path.join(BASE_DIR, "ffmpeg")
 FFMPEG_BIN_DIR = os.path.join(FFMPEG_DIR, "bin")
@@ -111,35 +113,37 @@ def ffmpeg_version_ok(path_ffmpeg: str, startupinfo=None) -> bool:
         return False
 
 def download_with_progress(url: str, dst: str, progress_cb=None):
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    """使用 requests 函式庫並以較大的區塊下載檔案，以提升效能。"""
     start = time.time()
-    with urllib.request.urlopen(req, timeout=60) as r, open(dst, "wb") as f:
-        total = getattr(r, "length", None)
+    headers = {"User-Agent": "Mozilla/5.0"}
+    
+    with requests.get(url, headers=headers, stream=True, timeout=60) as r:
+        r.raise_for_status()
+        total = int(r.headers.get('content-length', 0))
         downloaded = 0
         last_report = start
         last_bytes = 0
-        chunk_size = 1024 * 512
-        while True:
-            chunk = r.read(chunk_size)
-            if not chunk:
-                break
-            f.write(chunk)
-            downloaded += len(chunk)
-            now = time.time()
-            if progress_cb:
-                pct = (downloaded / total) if total else 0.0
-                dt = max(1e-3, now - last_report)
-                inst_speed = (downloaded - last_bytes) / dt  # B/s
-                mbps = inst_speed / (1024 * 1024)
-                elapsed = now - start
-                if (now - last_report) >= 0.2 or (total and downloaded == total):
-                    text = f"下載中… {pct*100:5.1f}% | {downloaded/1024/1024:,.2f} MB"
-                    if total:
-                        text += f" / {total/1024/1024:,.2f} MB"
-                    text += f" | {mbps:,.2f} MB/s | {int(elapsed)}s"
-                    progress_cb(min(0.8, pct * 0.8), text)
-                    last_report = now
-                    last_bytes = downloaded
+        chunk_size = 1024 * 512  # 512 KB chunk size for better performance
+
+        with open(dst, "wb") as f:
+            for chunk in r.iter_content(chunk_size=chunk_size):
+                f.write(chunk)
+                downloaded += len(chunk)
+                now = time.time()
+                if progress_cb:
+                    pct = (downloaded / total) if total else 0.0
+                    dt = max(1e-3, now - last_report)
+                    inst_speed = (downloaded - last_bytes) / dt  # B/s
+                    mbps = inst_speed / (1024 * 1024)
+                    elapsed = now - start
+                    if (now - last_report) >= 0.2 or (total and downloaded == total):
+                        text = f"下載中… {pct*100:5.1f}% | {downloaded/1024/1024:,.2f} MB"
+                        if total:
+                            text += f" / {total/1024/1024:,.2f} MB"
+                        text += f" | {mbps:,.2f} MB/s | {int(elapsed)}s"
+                        progress_cb(min(0.8, pct * 0.8), text)
+                        last_report = now
+                        last_bytes = downloaded
         if progress_cb:
             progress_cb(0.8, "下載完成，準備解壓…")
 

@@ -10,4 +10,4 @@ if __name__ == "__main__":
     # Python 會自動將 main.py 所在的目錄加入到 sys.path，
     # 因此可以直接匯入 'src'。
     from src.__main__ import main
-    main() 
+    main()

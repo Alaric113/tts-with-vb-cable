@@ -2,6 +2,12 @@
 # 檔案: runtime_hook.py
 # 功用: PyInstaller 執行階段掛鉤，用於在應用程式啟動時全域修補 subprocess 模組。
 
+import os
+# --- 核心修正: 解決 PyTorch/Kokoro 的 DLL 載入問題 (WinError 1114) ---
+# 這個環境變數必須在任何其他模組 (特別是 subprocess) 被匯入之前設定。
+# PyInstaller 的 runtime hook 是整個應用程式生命週期中最早的執行點，因此將其放在此處最為可靠。
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
 import sys
 import os
 import subprocess

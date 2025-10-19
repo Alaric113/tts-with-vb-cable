@@ -38,7 +38,7 @@ except ImportError:
 
 from ..utils.deps import (
     APP_VERSION, CABLE_INPUT_HINT,
-    ENGINE_EDGE, ENGINE_PYTTX3, DEFAULT_EDGE_VOICE,
+    ENGINE_EDGE, ENGINE_PYTTX3, ENGINE_KOKORO, DEFAULT_EDGE_VOICE,
     DependencyManager, IS_WINDOWS
 )
 from .audio_engine import AudioEngine
@@ -72,6 +72,7 @@ class LocalTTSPlayer(QObject):
         self.CABLE_INPUT_HINT = CABLE_INPUT_HINT
         self.ENGINE_EDGE = ENGINE_EDGE
         self.ENGINE_PYTTX3 = ENGINE_PYTTX3
+        self.ENGINE_KOKORO = ENGINE_KOKORO
 
         # 狀態/設定
         # 音訊核心 (必須在 _build_ui 之前建立，以便 UI 取得初始值)
@@ -116,7 +117,7 @@ class LocalTTSPlayer(QObject):
         self.audio.start() # UI 建立完成後，再啟動音訊背景執行緒
         # 載入設定
         self.audio.set_engine(self.config.get("engine"))
-        self.audio.edge_voice = self.config.get("voice")
+        self.audio.current_voice = self.config.get("voice")
         self.audio.tts_rate   = self.config.get("rate")
         self.audio.tts_volume = self.config.get("volume")
         self.audio.tts_pitch  = self.config.get("pitch", 0)
@@ -284,8 +285,9 @@ class LocalTTSPlayer(QObject):
                 return # 流程到此為止，等待使用者互動
             # 已存在 VB-CABLE，繼續
             self.audio.init_pyttsx3()
-            import asyncio
-            asyncio.run(self.audio.load_edge_voices())
+            # self.audio.init_kokoro() # 暫時停用以加速啟動
+            import asyncio # 延遲匯入
+            asyncio.run(self.audio.load_edge_voices()) # 現在這個呼叫是安全的
             self.audio.load_devices()
             self.signals.update_ui_after_load.emit()
             self.log_message("依賴與設備載入完成。" )
@@ -419,7 +421,6 @@ class LocalTTSPlayer(QObject):
         self.main_window.stop_button.setEnabled(True)
         
         self._start_hotkey_listener()
-        self.log_message("服務已啟動")
 
     def stop_local_player(self):
         if not self.is_running:
@@ -465,11 +466,11 @@ class LocalTTSPlayer(QObject):
         if phrase_info:
             # 根據當前設定產生預期的快取路徑
             cache_path = self.audio._get_cache_path(
-                phrase_info.get("text"),
-                self.audio.current_engine,
-                self.audio.edge_voice if self.audio.current_engine == self.ENGINE_EDGE else self.audio.pyttsx3_voice_id,
-                self.audio.tts_rate,
-                self.audio.tts_pitch
+                text=phrase_info.get("text"),
+                engine=self.audio.current_engine,
+                voice=self.audio.current_voice,
+                rate=self.audio.tts_rate,
+                pitch=self.audio.tts_pitch
             )
             if os.path.exists(cache_path):
                 # --- 核心修正: 將快取路徑和原始文字一起傳遞 ---
@@ -612,11 +613,11 @@ class LocalTTSPlayer(QObject):
 
     def on_global_focus_changed(self, old_widget, new_widget):
         """
-        監聽全域焦點變化。當焦點從快捷輸入框轉移到應用程式外部時，
+        監聽全域焦點變化。當焦點從快捷輸入框轉移到任何不屬於它的元件時，
         關閉快捷輸入框。
         """
-        # 檢查快捷輸入框是否存在且可見
-        if self.quick_input_window and self.quick_input_window.isVisible():
+        win = self.quick_input_window
+        if win and win.isVisible():
             # `new_widget` 為 None 表示焦點轉移到了此應用程式之外
             if new_widget is None:
                 # 檢查舊焦點是否在快捷輸入框內
@@ -624,6 +625,12 @@ class LocalTTSPlayer(QObject):
                 if old_widget == self.quick_input_window or is_child:
                     self.log_message("快捷輸入框因失去焦點而關閉。", "DEBUG")
                     self.quick_input_window.close()
+            else:
+                # 檢查新的焦點是否在快捷輸入框或其子元件之內
+                is_child = win.isAncestorOf(new_widget) if new_widget else False
+                if new_widget is not win and not is_child:
+                    self.log_message("快捷輸入框因失去焦點而關閉。", "DEBUG")
+                    win.close() # 呼叫 close() 會觸發 closeEvent
 
     # ===================== 快速輸入框 =====================
     def _show_quick_input(self):
@@ -637,23 +644,57 @@ class LocalTTSPlayer(QObject):
             return
 
         try:
-            # --- 核心修正: 修正縮排與邏輯 ---
-            if self.quick_input_window: # 檢查參照是否存在
-                # 如果視窗已存在，只需將其帶到最前
-                self.log_message("偵測到現有輸入視窗，將其帶到最前。", "DEBUG")
-                self.quick_input_window.show()
-                self.quick_input_window.activateWindow()
-                self.quick_input_window.raise_()
-            else:
+            # 如果視窗不存在或已被銷毀，則建立新視窗
+            if not self.quick_input_window:
                 # 如果視窗不存在，則建立新視窗
                 self.log_message("建立新的輸入視窗。", "DEBUG")
                 # 延遲匯入以避免循環依賴
                 from ..ui.popups import QuickInputWindow
                 
                 win = QuickInputWindow(self, parent=self.main_window)
-                self.quick_input_window = win # 在顯示前就設定好參照
+                self.quick_input_window = win # 在顯示前就設定好參照，這是安全的
+
+            # 將視窗帶到最前並啟用
+            win = self.quick_input_window
+            win.show()
+            win.activateWindow()
+            win.raise_()
+
+            # 在 Windows 上，使用 win32gui 強制設定前景視窗以確保焦點
+            if pywin32_installed:
+                # --- 核心優化: 透過模擬按鍵來解除前景視窗鎖定 ---
+                # 這是一個小技巧，可以讓 SetForegroundWindow 更可靠地運作，
+                # 特別是當焦點目前在一個全螢幕應用程式中時。
+                try:
+                    # 附加到前景視窗的執行緒輸入佇列
+                    foreground_window_hwnd = win32gui.GetForegroundWindow()
+                    foreground_thread_id, _ = win32process.GetWindowThreadProcessId(foreground_window_hwnd)
+                    current_thread_id = win32api.GetCurrentThreadId()
+
+                    # 附加執行緒輸入，以便我們可以傳送按鍵事件
+                    win32process.AttachThreadInput(current_thread_id, foreground_thread_id, True)
+
+                    # 模擬 Alt 鍵的按下與釋放，這會釋放前景鎖定
+                    win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+                    win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
+
+                    # 最後，將我們的視窗設為前景
+                    win32gui.SetForegroundWindow(win.winId())
+
+                    # 分離執行緒輸入
+                    win32process.AttachThreadInput(current_thread_id, foreground_thread_id, False)
+
+                except Exception as e:
+                    self.log_message(f"SetForegroundWindow 失敗: {e}", "WARN")
 
                 screen = QApplication.primaryScreen().geometry()
+
+            # --- 新增: 焦點獲取失敗的自動關閉計時器 ---
+            QTimer.singleShot(3000, lambda: self._check_and_close_unfocused_window(win))
+
+            # --- 修正: 將視窗定位移到 win32gui 呼叫之後 ---
+            # 確保視窗在設定位置前已經被帶到前景
+            if IS_WINDOWS:
                 screen_w, screen_h = screen.width(), screen.height()
                 w, h = 420, 42
 
@@ -670,13 +711,33 @@ class LocalTTSPlayer(QObject):
                     x = screen_w - w - 20; y = screen_h - h - 40
 
                 win.setGeometry(x, y, w, h)
-                win.show()
-                win.activateWindow()
-                win.raise_()
         finally:
             # 確保鎖總是被釋放
             self._input_window_lock.release()
             self.log_message("已釋放輸入視窗鎖。", "DEBUG")
+
+    def _check_and_close_unfocused_window(self, window_instance):
+        """
+        檢查指定的視窗實例是否可見但未獲取焦點，若是則將其關閉。
+        這是為了處理快捷輸入框顯示後，因意外而未成功 focus 的情況。
+        """
+        # --- 核心修正: 解決 RuntimeError ---
+        # 在存取 window_instance 之前，先檢查它是否仍然是當前有效的視窗。
+        # 如果 self.quick_input_window 已經是 None 或指向了不同的實例，
+        # 表示原始視窗已經被使用者手動關閉，計時器的任務應該被取消。
+        if self.quick_input_window is not window_instance:
+            return # 視窗已被處理，安全退出
+
+        if window_instance.isVisible():
+            focus_widget = QApplication.focusWidget()
+            # 檢查焦點是否在視窗本身或其任何子元件之內
+            has_focus = (focus_widget is window_instance) or \
+                        (window_instance.isAncestorOf(focus_widget) if focus_widget else False) # type: ignore
+
+            if not has_focus:
+                self.log_message("快捷輸入框因超時未獲取焦點而自動關閉。", "DEBUG")
+                window_instance.close()
+
     def handle_quick_input_history(self, entry, key):
         if not self.text_history:
             return
@@ -709,7 +770,7 @@ class LocalTTSPlayer(QObject):
                 self.text_history.appendleft(text)
                 self.config.set("text_history", list(self.text_history))
                 self.audio.play_text(text)
-            self.quick_input_window.close_window()
+            self.quick_input_window.close()
 
     # ===================== 設定視窗 & 快捷語音 =====================
     def _open_settings_window(self):
@@ -744,49 +805,64 @@ class LocalTTSPlayer(QObject):
         self.config.set("enable_quick_phrases", self.enable_quick_phrases)
         if self.is_running:
             self._start_hotkey_listener()
-
+    
     def toggle_log_area(self, initial_load=False):
         """
         切換日誌區域的顯示/隱藏狀態。
         :param initial_load: 如果是程式初次載入，則只根據設定更新UI，不反轉狀態。
         """
         is_expanded = self.config.get("show_log_area", True)
-
+    
         if not initial_load:
             is_expanded = not is_expanded
             self.config.set("show_log_area", is_expanded)
-
-        if is_expanded:
-            self.main_window.log_text.show()
-            self.main_window.log_toggle_button.setText("▼")
-            self.main_window.resize(self.main_window.width(), 890) # 展開後的高度
-        else:
-            self.main_window.log_text.hide()
-            self.main_window.log_toggle_button.setText("▲")
-            self.main_window.resize(self.main_window.width(), 610) # 收合後的高度
+    
+        self.main_window.toggle_log_area_ui(is_expanded, animate=not initial_load)
 
     # ===================== 其它事件 =====================
     def _on_engine_change(self, val):
-        self.audio.set_engine(val)
-        self.log_message(f"切換引擎: {self.audio.current_engine}")
-        # 更新 voices
-        if val == ENGINE_EDGE:
-            self.main_window.pitch_slider.setEnabled(True)
+        # --- 核心修正: 在更新 UI 時暫時中斷信號連接，避免觸發不必要的事件 ---
+        combo = self.main_window.voice_combo
+        combo.blockSignals(True)
+        try:
+            self.audio.set_engine(val)
+            self.log_message(f"切換引擎: {self.audio.current_engine}")
+            # 更新 voices
             values = self.audio.get_voice_names()
-            self.main_window.voice_combo.clear()
-            self.main_window.voice_combo.addItems(values)
-            self.main_window.voice_combo.setCurrentText(self.audio.edge_voice if self.audio.edge_voice in values else values[0])
-        else:
-            self.main_window.pitch_slider.setEnabled(False)
-            names = self.audio.get_voice_names()
-            self.main_window.voice_combo.clear()
-            self.main_window.voice_combo.addItems(names)
-            # 載入 pyttsx3 時，可能需要設定預設語音
-            loaded_name = self.config.get("voice")
-            self.main_window.voice_combo.setCurrentText(loaded_name if loaded_name in names else (names[0] if names else "default"))
-        self.config.set("engine", val)
+            combo.clear()
+            combo.addItems(values)
+
+            if val == ENGINE_EDGE:
+                self.main_window.pitch_slider.setEnabled(True)
+                combo.setCurrentText(self.audio.current_voice if self.audio.current_voice in values else (values[0] if values else ""))
+                combo.setEnabled(True)
+            elif val == ENGINE_KOKORO:
+                self.main_window.pitch_slider.setEnabled(False)
+                if not values or values == ["default"]:
+                    # 如果語音列表尚未載入完成，顯示提示文字並禁用下拉選單
+                    combo.clear()
+                    combo.addItem("正在載入模型...")
+                    combo.setEnabled(False)
+                else:
+                    # 語音列表已載入，正常設定
+                    loaded_name = self.config.get("voice")
+                    combo.setCurrentText(loaded_name if loaded_name in values else values[0])
+                    combo.setEnabled(True)
+            else: # pyttsx3
+                self.main_window.pitch_slider.setEnabled(False)
+                # 載入 pyttsx3 時，可能需要設定預設語音
+                loaded_name = self.config.get("voice")
+                combo.setCurrentText(loaded_name if loaded_name in values else (values[0] if values else "default"))
+                combo.setEnabled(True)
+
+            self.config.set("engine", val)
+        finally:
+            combo.blockSignals(False)
 
     def _on_voice_change(self, choice):
+        # --- 重構: 將 UI 邏輯移回 UI 層 ---
+        # 控制器只負責更新模型 (audio engine) 和設定檔
+
         if not choice or self._ui_loading: # 如果正在載入或選項為空，則不執行
             return
         
@@ -799,19 +875,18 @@ class LocalTTSPlayer(QObject):
         # 判斷是否為自訂語音
         if voice_data.get("engine") == ENGINE_EDGE and "base_voice" in voice_data:
             # 是自訂語音，套用其設定
-            self.audio.set_edge_voice(voice_data["base_voice"])
-            self.main_window.speed_slider.setValue(voice_data["rate"])
-            # --- 修正: 增加音量設定 ---
-            self.main_window.volume_slider.setValue(int(voice_data.get("volume", 1.0) * 100))
-            self.main_window.pitch_slider.setValue(voice_data.get("pitch", 0)) # 使用 .get 增加安全性
-            self.update_tts_settings()
+            self.audio.set_current_voice(voice_data["base_voice"]) # 設定基礎聲線
+            # 更新 audio engine 的參數，UI 會監聽這些變化並自我更新
+            self.audio.tts_rate = voice_data["rate"]
+            self.audio.tts_pitch = voice_data.get("pitch", 0)
+            self.signals.update_ui_after_load.emit() # 發送信號通知 UI 更新滑桿
         else:
             # 是原始語音
-            if self.audio.current_engine == ENGINE_EDGE:
-                self.audio.set_edge_voice(voice_data["ShortName"])
-            else:
+            if self.audio.current_engine != ENGINE_PYTTX3:
+                self.audio.set_current_voice(choice)
+            else: # pyttsx3
                 self.audio.set_pyttsx3_voice_by_name(voice_data["name"])
-        
+
         self.config.set("voice", choice)
         self.log_message(f"當前語音已設定為: {choice}")
 

@@ -1,0 +1,23 @@
+# 這是針對 Windows 環境的依賴列表。
+# 核心修正: 限制 numpy 版本小於 2.0，以解決與 torch 等套件的 ABI 相容性問題。
+numpy<2.0
+
+# GUI 框架
+PyQt6
+
+# TTS 引擎與音訊處理
+edge-tts
+pyttsx3
+kokoro>=0.8.2
+misaki[zh]>=0.8.2
+sounddevice
+pydub
+
+# Windows 特定功能
+pynput
+comtypes
+pywin32
+
+# 其它工具
+requests
+packaging
