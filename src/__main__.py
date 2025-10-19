@@ -74,15 +74,6 @@ def main():
         messagebox.showwarning("警告", "此應用程式主要為 Windows 設計，在您目前的作業系統上，部分功能（如 VB-CABLE 安裝）將無法使用。")
     else:
         try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(1)
-        except Exception:
-            try:
-                # 備用方法
-                ctypes.windll.user32.SetProcessDPIAware()
-            except Exception:
-                pass
-        # PyQt6 的高 DPI 處理
-        try:
             QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
             # AA_EnableHighDpiScaling 在較新的 PyQt6 版本中已過時或移除
             if hasattr(Qt.ApplicationAttribute, 'AA_EnableHighDpiScaling'):
@@ -91,8 +82,8 @@ def main():
         except Exception as e:
             print(f"設定高 DPI 失敗 (可忽略): {e}")
 
-        # --- 修正: 建立一個可重用的 startupinfo 物件來隱藏主控台視窗 ---
-        # 這個物件將被傳遞給需要隱藏視窗的 subprocess.Popen 呼叫。
+        # --- 核心修正: 建立一個可重用的 startupinfo 物件來隱藏主控台視窗 ---
+        # 這個物件將被傳遞給所有需要隱藏視窗的 subprocess.Popen 呼叫。
         startupinfo = None
         if is_windows():
             # 為了 PyQt 的樣式，設定環境變數

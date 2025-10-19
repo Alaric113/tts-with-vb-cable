@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QLabel, QPushButton, QComboBox, QSlider, QFrame, QTextEdit, QSizePolicy,
     QCheckBox, QTabWidget, QGraphicsDropShadowEffect, QGraphicsBlurEffect
 )
-from PyQt6.QtCore import Qt, QSize, QPoint, QPropertyAnimation, QEasingCurve, pyqtSignal
+from PyQt6.QtCore import Qt, QSize, QPoint
 from PyQt6.QtGui import QFont, QIcon, QColor
 import os
 import sys
@@ -31,8 +31,6 @@ class WheelAdjustableSlider(QSlider):
         event.accept() # 接受事件，防止其傳播到父元件
 
 class MainWindow(QMainWindow):
-    resized = pyqtSignal()
-
     def __init__(self, app_controller):
         super().__init__()
         self.app = app_controller
@@ -332,15 +330,7 @@ class MainWindow(QMainWindow):
 
         body_layout.addWidget(self._create_dashboard()) # 頂部儀表板
         body_layout.addWidget(self._create_main_content_area()) # 新的整合內容區
-
-        # --- 核心修正: 加入彈性空間，避免內容區塊被垂直拉伸 ---
-        body_layout.addStretch(1)
-
-        # --- 核心修正: 調整日誌區域結構以支援動畫 ---
-        log_header, log_text_area = self._create_log_area()
-        body_layout.addWidget(log_header)
-        body_layout.addWidget(log_text_area)
-        self.log_text_area_widget = log_text_area # 直接參照 QTextEdit
+        body_layout.addWidget(self._create_log_area(), 1) # 底部日誌區
 
         # 將 app controller 的參照指向 UI 元件
         self.app.engine_combo = self.engine_combo
@@ -358,15 +348,6 @@ class MainWindow(QMainWindow):
         # 設置初始大小
         self.resize(720, 610) # 初始為收合狀態
 
-        # --- 重構: 將 UI 更新邏輯移至此處 ---
-        # 連接 app.signals.update_ui_after_load 到一個專門的 UI 更新方法
-        self.app.signals.update_ui_after_load.connect(self.update_sliders_from_model)
-
-    def update_sliders_from_model(self):
-        """根據 audio engine 的狀態更新滑桿數值。"""
-        self.speed_slider.setValue(self.app.audio.tts_rate)
-        self.pitch_slider.setValue(self.app.audio.tts_pitch)
-
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             # 檢查點擊是否在標題列區域
@@ -382,15 +363,6 @@ class MainWindow(QMainWindow):
     def mouseReleaseEvent(self, event):
         self.drag_position = QPoint()
         event.accept()
-
-    def changeEvent(self, event):
-        """覆寫 changeEvent 來偵測視窗狀態變化。"""
-        super().changeEvent(event)
-        # 當視窗被啟動 (例如，使用者點擊了它)
-        if event.type() == event.Type.ActivationChange and self.isActiveWindow():
-            # 如果快捷輸入框存在，就關閉它
-            if self.app.quick_input_window:
-                self.app.quick_input_window.close()
 
     def closeEvent(self, event):
         self.app.on_closing()
@@ -532,7 +504,6 @@ class MainWindow(QMainWindow):
         self.local_device_combo.currentTextChanged.connect(self.app._on_local_device_change)
         out_layout.addWidget(self.local_device_combo)
         out_layout.addWidget(QLabel(f"💡 提示: Discord 麥克風請設為 {self.app.CABLE_INPUT_HINT}", styleSheet=f"color: {self.SECONDARY_TEXT_COLOR}; font-weight: normal;"))
-        out_layout.addStretch(1) # <-- 核心修正：加入彈性空間，讓內容置頂
         return out_frame
 
     def _create_tts_selection_card(self):
@@ -681,6 +652,11 @@ class MainWindow(QMainWindow):
         return actions_card
 
     def _create_log_area(self):
+        log_widget = QWidget()
+        layout = QVBoxLayout(log_widget)
+        layout.setContentsMargins(0,0,0,0)
+        layout.setSpacing(0)
+
         header_card = QFrame()
         header_card.setObjectName("BubbleCard")
         header_card.setStyleSheet(f"QFrame#BubbleCard {{ border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom: none; }}")
@@ -699,14 +675,16 @@ class MainWindow(QMainWindow):
         self.log_toggle_button.setFont(QFont("Arial", 12))
         self.log_toggle_button.clicked.connect(self.app.toggle_log_area)
         header_layout.addWidget(self.log_toggle_button)
+        layout.addWidget(self._add_shadow(header_card))
 
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setObjectName("LogArea")
         self.log_text.setStyleSheet(f"QTextEdit#LogArea {{ border-top-left-radius: 0; border-top-right-radius: 0; border-top: none; }}")
         self.log_text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        layout.addWidget(self.log_text)
 
-        return self._add_shadow(header_card), self.log_text
+        return log_widget
 
     def show_overlay(self, widget_to_show):
         """顯示覆蓋層並模糊背景。"""
@@ -731,31 +709,3 @@ class MainWindow(QMainWindow):
             if widget_to_remove:
                 widget_to_remove.deleteLater()
         self.overlay_widget.hide()
-
-    def toggle_log_area_ui(self, expand, animate=True):
-        """
-        控制日誌區域的顯示和隱藏。
-        :param expand: True 為展開，False 為收合。
-        :param animate: 是否使用動畫。
-        """
-        # --- 核心修正: 確保動畫目標正確 ---
-        if not hasattr(self, 'log_text_area_widget'):
-            return
-
-        # 根據文字框的顯示狀態來決定當前高度
-        current_height = self.log_text_area_widget.height() if self.log_text_area_widget.isVisible() else 0
-        target_height = 200 if expand else 0 # 展開高度為 200, 收合為 0
-
-        self.log_toggle_button.setText("▼" if expand else "▲")
-
-        if animate:
-            self.log_text_area_widget.show() # 確保動畫開始前是可見的
-            self.animation = QPropertyAnimation(self.log_text_area_widget, b"maximumHeight")
-            self.animation.setDuration(300)
-            self.animation.setStartValue(current_height)
-            self.animation.setEndValue(target_height)
-            self.animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
-            self.animation.start()
-        else:
-            self.log_text_area_widget.setMaximumHeight(target_height)
-            self.log_text_area_widget.setVisible(expand)

@@ -823,7 +823,7 @@ class QuickPhrasesWindow(BaseDialog):
             hotkey_str = "+".join(sorted(list(pressed))) if pressed else ""
             normalized_hotkey = self.app._normalize_hotkey(hotkey_str)
 
-            conflict_msg = self.app._check_hotkey_conflict(normalized_hotkey, 'quick_phrase', index_to_edit, phrases_to_check=self.phrases_buffer)
+            conflict_msg = self.app._check_hotkey_conflict(normalized_hotkey, 'quick_phrase', index_to_edit)
             
             # --- 修正: 不直接操作 UI，而是發射信號 ---
             # 發射信號，將 UI 更新任務交給主執行緒
@@ -859,15 +859,15 @@ class QuickPhrasesWindow(BaseDialog):
             self._finalize_recording(index)
 
 class QuickInputWindow(QWidget):
-    def __init__(self, app_controller, parent=None):
-        super().__init__(parent)
-        self.app = app_controller # 儲存對 app controller 的參照
+    def __init__(self, app_controller):
+        super().__init__()
+        self.app = app_controller
+        self.history_index = -1
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
 
-        # 主佈局
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
 
@@ -888,12 +888,12 @@ class QuickInputWindow(QWidget):
         """)
         self.layout.addWidget(self.entry)
 
-        # 連接信號
         self.entry.returnPressed.connect(self.app.send_quick_input)
         self.entry.installEventFilter(self)
 
+        QTimer.singleShot(100, self.app.release_input_window_lock)
+
     def eventFilter(self, source, event):
-        # 處理按鍵事件 (歷史紀錄、Esc關閉)
         if event.type() == event.Type.KeyPress:
             if event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
                 self.app.handle_quick_input_history(self.entry, event.key())
@@ -903,19 +903,16 @@ class QuickInputWindow(QWidget):
                 return True
         return super().eventFilter(source, event)
 
+    def focusOutEvent(self, event):
+        self.close()
+        super().focusOutEvent(event)
+
     def showEvent(self, event):
-        # 視窗顯示時，自動對焦並選取所有文字
         super().showEvent(event)
         self.entry.setFocus()
         self.entry.selectAll()
 
     def closeEvent(self, event):
-        """
-        覆寫 Qt 的 closeEvent，確保在視窗被銷毀前，
-        主程式中的參照被安全地清除。
-        """
-        self.app.log_message("QuickInputWindow closeEvent 觸發。", "DEBUG")
-        # 清理主程式中的參照，這是最關鍵的一步
-        if self.app.quick_input_window is self:
-            self.app.quick_input_window = None
+        self.app.release_input_window_lock()
+        self.app.quick_input_window = None
         super().closeEvent(event)

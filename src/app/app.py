@@ -38,7 +38,7 @@ except ImportError:
 
 from ..utils.deps import (
     APP_VERSION, CABLE_INPUT_HINT,
-    ENGINE_EDGE, ENGINE_PYTTX3, ENGINE_KOKORO, DEFAULT_EDGE_VOICE,
+    ENGINE_EDGE, ENGINE_PYTTX3, DEFAULT_EDGE_VOICE,
     DependencyManager, IS_WINDOWS
 )
 from .audio_engine import AudioEngine
@@ -72,7 +72,6 @@ class LocalTTSPlayer(QObject):
         self.CABLE_INPUT_HINT = CABLE_INPUT_HINT
         self.ENGINE_EDGE = ENGINE_EDGE
         self.ENGINE_PYTTX3 = ENGINE_PYTTX3
-        self.ENGINE_KOKORO = ENGINE_KOKORO
 
         # 狀態/設定
         # 音訊核心 (必須在 _build_ui 之前建立，以便 UI 取得初始值)
@@ -285,7 +284,6 @@ class LocalTTSPlayer(QObject):
                 return # 流程到此為止，等待使用者互動
             # 已存在 VB-CABLE，繼續
             self.audio.init_pyttsx3()
-            # self.audio.init_kokoro() # 暫時停用以加速啟動
             import asyncio # 延遲匯入
             asyncio.run(self.audio.load_edge_voices()) # 現在這個呼叫是安全的
             self.audio.load_devices()
@@ -817,7 +815,10 @@ class LocalTTSPlayer(QObject):
             is_expanded = not is_expanded
             self.config.set("show_log_area", is_expanded)
     
-        self.main_window.toggle_log_area_ui(is_expanded, animate=not initial_load)
+        # --- 核心修正: 直接控制 UI 元件，移除對不存在方法的呼叫 ---
+        if hasattr(self.main_window, 'log_area_widget'):
+            self.main_window.log_area_widget.setVisible(is_expanded)
+            self.main_window.log_toggle_button.setText("▼" if is_expanded else "▲")
 
     # ===================== 其它事件 =====================
     def _on_engine_change(self, val):
@@ -836,18 +837,6 @@ class LocalTTSPlayer(QObject):
                 self.main_window.pitch_slider.setEnabled(True)
                 combo.setCurrentText(self.audio.current_voice if self.audio.current_voice in values else (values[0] if values else ""))
                 combo.setEnabled(True)
-            elif val == ENGINE_KOKORO:
-                self.main_window.pitch_slider.setEnabled(False)
-                if not values or values == ["default"]:
-                    # 如果語音列表尚未載入完成，顯示提示文字並禁用下拉選單
-                    combo.clear()
-                    combo.addItem("正在載入模型...")
-                    combo.setEnabled(False)
-                else:
-                    # 語音列表已載入，正常設定
-                    loaded_name = self.config.get("voice")
-                    combo.setCurrentText(loaded_name if loaded_name in values else values[0])
-                    combo.setEnabled(True)
             else: # pyttsx3
                 self.main_window.pitch_slider.setEnabled(False)
                 # 載入 pyttsx3 時，可能需要設定預設語音

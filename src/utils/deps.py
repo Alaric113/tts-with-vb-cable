@@ -52,7 +52,6 @@ VB_CABLE_DOWNLOAD_URL = "https://download.vb-audio.com/Download_CABLE/VBCABLE_Dr
 DEFAULT_EDGE_VOICE = "zh-CN-XiaoxiaoNeural"
 ENGINE_EDGE   = "edge-tts"
 ENGINE_PYTTX3 = "pyttsx3"
-ENGINE_KOKORO = "kokoro"
 
 FFMPEG_DIR = os.path.join(BASE_DIR, "ffmpeg")
 FFMPEG_BIN_DIR = os.path.join(FFMPEG_DIR, "bin")
@@ -99,14 +98,10 @@ def has_bundled_ffmpeg() -> bool:
 
 def ffmpeg_version_ok(path_ffmpeg: str, startupinfo=None) -> bool:
     try:
-        # --- 修正: 傳遞 startupinfo 以隱藏視窗 ---
-        creationflags = 0
-        if IS_WINDOWS:
-            creationflags = subprocess.CREATE_NO_WINDOW
+        # --- 核心修正: 傳遞 startupinfo 以隱藏視窗 ---
         res = subprocess.run(
             [path_ffmpeg, "-version"], capture_output=True, text=True, timeout=5,
-            startupinfo=startupinfo,
-            creationflags=creationflags
+            startupinfo=startupinfo
         )
         return res.returncode == 0 and ("ffmpeg" in (res.stdout.lower() + res.stderr.lower()))
     except Exception:

@@ -130,7 +130,8 @@ class UpdateManager:
             # 將從主程式傳入的 startupinfo 物件傳遞給 Popen，以確保在需要時能隱藏視窗。
             subprocess.Popen(
                 command,
-                creationflags=subprocess.DETACHED_PROCESS, close_fds=True, startupinfo=self.app.startupinfo
+                creationflags=subprocess.DETACHED_PROCESS,
+                close_fds=True, startupinfo=self.app.startupinfo
             )
             
             QTimer.singleShot(1000, self.app.on_closing)

@@ -20,19 +20,12 @@ import subprocess
 import queue
 import hashlib
 
-from ..utils.deps import (
-    DEFAULT_EDGE_VOICE, ENGINE_EDGE, ENGINE_PYTTX3, ENGINE_KOKORO, CABLE_INPUT_HINT
-)
+from ..utils.deps import (DEFAULT_EDGE_VOICE, ENGINE_EDGE, ENGINE_PYTTX3,
+                          CABLE_INPUT_HINT)
 
 # 延遲匯入，避免在 ffmpeg 路徑設定前就發出警告
 pyttsx3 = None
 AudioSegment = None
-
-# --- 新增: 延遲匯入 kokoro ---
-KOKORO_PIPELINE = None # 儲存 KPipeline 實例
-KOKORO_VOICES = {}
-KOKORO_VOICES_LOADED = False
-# -----------------------------
 
 class AudioEngine:
     def __init__(self, log_callback, status_queue, startupinfo=None):
@@ -117,31 +110,6 @@ class AudioEngine:
         temp_engine = pyttsx3.init()
         self._pyttsx3_voices = temp_engine.getProperty("voices")
         temp_engine.stop() # 獲取後立即銷毀
-
-    def init_kokoro(self):
-        """載入 kokoro 引擎與 misaki 中文語音。"""
-        global KOKORO_PIPELINE, KOKORO_VOICES, KOKORO_VOICES_LOADED
-        if KOKORO_VOICES_LOADED:
-            return
-        try:
-            # --- 最終核心修正: 使用 KPipeline API ---
-            from kokoro import KPipeline
-            # 實例化 KPipeline，lang_code='zh' 表示只載入中文相關模型
-            pipeline = KPipeline(lang_code='zh')
-            KOKORO_PIPELINE = pipeline
-            # 從 pipeline 物件的 voices 屬性獲取語音列表
-            # 它是一個字典，鍵是 speaker 名稱，值是 speaker ID
-            KOKORO_VOICES = pipeline.voices
-            # --- 核心修正: 檢查語音列表是否為空 ---
-            if not KOKORO_VOICES:
-                self.log("kokoro 引擎已載入，但未找到任何語音模型。", "WARN")
-                self.log("請確認 'misaki[zh]' 已正確安裝: pip install -q \"misaki[zh]>=0.8.2\"", "WARN")
-                # 即使列表為空，也標記為已載入，避免重複嘗試
-            KOKORO_VOICES_LOADED = True
-            self.log("成功載入 kokoro 引擎與 misaki[zh] 語音。", "INFO")
-        except ImportError:
-            self.log("缺少 'kokoro' 或 'misaki[zh]' 模組，相關功能將無法使用。", "ERROR")
-            self.log("請執行: pip install -q kokoro>=0.8.2 \"misaki[zh]>=0.8.2\"", "ERROR")
 
     async def load_edge_voices(self):
         # --- 核心修正: 延遲匯入 edge_tts ---
@@ -228,8 +196,6 @@ class AudioEngine:
     def get_voice_names(self):
         if self.current_engine == ENGINE_EDGE:
             return [DEFAULT_EDGE_VOICE] + [v["ShortName"] for v in self._edge_voices]
-        elif self.current_engine == ENGINE_KOKORO:
-            return list(KOKORO_VOICES.keys()) if KOKORO_VOICES else ["default"]
         else:
             return [v.name for v in self._pyttsx3_voices] if self._pyttsx3_voices else ["default"]
 
@@ -298,43 +264,6 @@ class AudioEngine:
         finally:
             if engine:
                 engine.stop() # 確保引擎被銷毀
-
-    def _synth_kokoro_to_file(self, text, path, voice_override=None) -> bool:
-        """使用 kokoro 引擎合成語音並存檔。"""
-        if not KOKORO_PIPELINE:
-            self.log("kokoro 引擎未初始化，無法合成。", "ERROR")
-            # --- 核心修正: 回傳 False 表示合成失敗 ---
-            return False
-
-        try:
-            # --- 核心修正: 確保 speaker_to_use 永遠有效 ---
-            # 1. 優先使用函式傳入的覆寫值 (用於試聽)。
-            # 2. 其次使用 self.current_voice，它儲存了使用者在 UI 上的選擇。
-            # 3. 如果 self.current_voice 在 kokoro 的語音列表中不存在 (例如剛從 edge-tts 切換過來)，
-            #    則安全地選擇 kokoro 列表中的第一個語音作為預設值。
-            speaker_to_use = voice_override or self.current_voice
-            if not speaker_to_use or speaker_to_use not in KOKORO_VOICES:
-                speaker_to_use = list(KOKORO_VOICES.keys())[0] if KOKORO_VOICES else None
-            if not speaker_to_use:
-                raise ValueError("Kokoro 語音列表為空，無法合成。")
-
-            # --- 核心修正: 移除 speed 參數，使用 kokoro 預設值 ---
-            # 避免因參數範圍錯誤導致底層崩潰
-            
-            # --- 最終核心修正: 呼叫 pipeline 物件進行合成 ---
-            # KPipeline 的 __call__ 方法是一個生成器，我們只需要第一個結果
-            generator = KOKORO_PIPELINE(text, voice=speaker_to_use)
-            _, _, audio_data = next(generator)
-
-            # 將音訊資料寫入檔案
-            import soundfile as sf
-            # kokoro 預設輸出取樣率為 24000
-            sf.write(path, audio_data, 24000)
-            return True
-
-        except Exception as e:
-            self.log(f"Kokoro 合成失敗: {e}", "ERROR")
-            return False
 
     # ---------- 播放 ----------
     def _animate_playback(self, text, stop_event):
@@ -427,9 +356,6 @@ class AudioEngine:
                     audio = AudioSegment.from_mp3(tmp_mp3.name)
                     audio.export(cache_path, format="wav")
                 os.remove(tmp_mp3.name)
-            elif self.current_engine == ENGINE_KOKORO:
-                # Kokoro 直接生成 WAV
-                self._synth_kokoro_to_file(text, cache_path)
             else: # pyttsx3
                 self._synth_pyttsx3_to_file(text, cache_path)
             self.log(f"快取建立成功: {os.path.basename(cache_path)}", "INFO")
@@ -514,8 +440,6 @@ class AudioEngine:
                         text, play_file_path,
                         voice_override=voice_override, rate_override=rate_override, pitch_override=pitch_override
                     ))
-                elif self.current_engine == ENGINE_KOKORO:
-                    synthesis_success = self._synth_kokoro_to_file(text, play_file_path, voice_override=voice_override)
                 else:
                     # pyttsx3 試聽暫不支援覆寫，因其引擎狀態是同步的
                     synthesis_success = self._synth_pyttsx3_to_file(text, play_file_path)
