@@ -39,3 +39,4 @@ config.json
 # Old versions
 _old_versions/
 JuMouth_update.zip
+*.zip
