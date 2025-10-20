@@ -195,19 +195,19 @@ class LocalTTSPlayer(QObject):
         else:
             log_widget.append(formatted_msg)
 
-    def show_messagebox(self, title, message, msg_type="info", callback_or_event=None):
+    def show_messagebox(self, title, message, msg_type="info", callback=None):
         """
         安全地從任何執行緒顯示訊息框。
         - 如果傳入 callback，則為非同步呼叫。
         - 如果傳入 (threading.Event, list)，則為同步呼叫，會阻塞直到使用者回應。
         """
         # 檢查是否為同步呼叫
-        is_sync_call = isinstance(callback_or_event, tuple) and len(callback_or_event) == 2 and isinstance(callback_or_event[0], threading.Event)
+        is_sync_call = isinstance(callback, tuple) and len(callback) == 2 and isinstance(callback[0], threading.Event)
 
-        self.signals.show_messagebox_signal.emit(title, message, msg_type, callback_or_event)
+        self.signals.show_messagebox_signal.emit(title, message, msg_type, callback)
 
         if is_sync_call:
-            event, result_container = callback_or_event
+            event, result_container = callback
             # 等待 UI 執行緒設定事件
             event.wait()
             # 從容器中取得結果
@@ -773,13 +773,13 @@ class LocalTTSPlayer(QObject):
     # ===================== 設定視窗 & 快捷語音 =====================
     def _open_settings_window(self):
         # 檢查覆蓋層是否已經有內容
-        if self.main_window.overlay_layout.count() > 0:
+        if self.main_window.stacked_layout.currentIndex() == 1:
             return # 如果已經有東西，就不再開啟
         settings_widget = SettingsWindow(self.main_window, self)
         self.main_window.show_overlay(settings_widget)
 
     def _open_quick_phrases_window(self):
-        if self.main_window.overlay_layout.count() > 0:
+        if self.main_window.stacked_layout.currentIndex() == 1:
             return # 如果已經有東西，就不再開啟
 
         while len(self.quick_phrases) < 10:
@@ -790,7 +790,7 @@ class LocalTTSPlayer(QObject):
         self.main_window.show_overlay(phrases_widget)
 
     def _open_voice_selection_window(self):
-        if self.main_window.overlay_layout.count() > 0:
+        if self.main_window.stacked_layout.currentIndex() == 1:
             return
         from ..ui.popups import VoiceSelectionWindow
         voice_widget = VoiceSelectionWindow(self.main_window, self)
@@ -816,9 +816,9 @@ class LocalTTSPlayer(QObject):
             self.config.set("show_log_area", is_expanded)
     
         # --- 核心修正: 直接控制 UI 元件，移除對不存在方法的呼叫 ---
-        if hasattr(self.main_window, 'log_area_widget'):
-            self.main_window.log_area_widget.setVisible(is_expanded)
-            self.main_window.log_toggle_button.setText("▼" if is_expanded else "▲")
+        # --- 核心修改: 只控制 log_text 的可見性，而不是整個 log_widget ---
+        self.main_window.log_text.setVisible(is_expanded)
+        self.main_window.log_toggle_button.setText("▼" if is_expanded else "▲")
 
     # ===================== 其它事件 =====================
     def _on_engine_change(self, val):

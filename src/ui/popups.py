@@ -2,8 +2,8 @@
 # 檔案: src/ui/popups.py
 # 功用: 定義應用程式中使用的各種 PyQt 彈出視窗。
 
-from PyQt6.QtWidgets import (
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
+from PyQt6.QtWidgets import ( # type: ignore
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout, QMainWindow,
     QLabel, QPushButton, QComboBox, QSlider, QCheckBox, QLineEdit,
     QFrame, QDialogButtonBox, QMessageBox, QScrollArea, QRadioButton, QGraphicsDropShadowEffect
 )
@@ -16,11 +16,15 @@ class BaseDialog(QWidget):
     """所有彈出對話框的基類，提供統一的外觀和行為。"""
     def __init__(self, parent, title, width=500, height=300):
         super().__init__(parent)
-        self.main_window = parent # 明確儲存主視窗的參照
+        self.main_window = parent # 明確儲存主視窗的參照 (通常是 MainWindow)
         self.title = title
         self.setMinimumSize(width, height)
         self.setMaximumSize(width, height) # 設定最大尺寸以固定大小
 
+        # --- 核心修改: 讓 BaseDialog 本身成為帶樣式的容器 ---
+        self.setObjectName("BaseDialogFrame")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        
         # --- 獨立的彈出視窗樣式定義 ---
         self.TEXT_COLOR = "#333333"
         self.ACCENT_COLOR = "#007AFF"
@@ -51,6 +55,10 @@ class BaseDialog(QWidget):
 
         # --- 樣式表 ---
         self.setStyleSheet(f"""
+            #BaseDialogFrame {{
+                background-color: rgb({self.BG_COLOR_RGB});
+                border-radius: 12px;
+            }}
             QDialog {{
                 background-color: transparent;
                 color: {self.TEXT_COLOR};
@@ -214,29 +222,19 @@ class BaseDialog(QWidget):
             #CloseButton:hover {{ background-color: {self.STATUS_RED_COLOR}; color: white; }}
         """)
 
-        # --- 新的佈局結構 ---
-        # 1. 容器 widget 作為 central widget
-        container_widget = QWidget()
-        central_layout = QVBoxLayout(container_widget)
-        central_layout.setContentsMargins(0, 0, 0, 0)
-        self.setLayout(central_layout)
-
-        # 2. 內容框架，具有背景色和圓角
-        self.content_frame = QFrame()
-        self.content_frame.setStyleSheet(f"background-color: rgb({self.BG_COLOR_RGB}); border-radius: 12px;")
-        central_layout.addWidget(self.content_frame)
-
-        # 3. 內容框架內的佈局
-        frame_layout = QVBoxLayout(self.content_frame)
+        # --- 核心修改: 簡化佈局 ---
+        # BaseDialog 本身就是容器，直接在其上設定佈局
+        frame_layout = QVBoxLayout(self)
         frame_layout.setContentsMargins(0, 0, 0, 0)
         frame_layout.setSpacing(0)
 
-        # 4. 加入自訂標題列和主內容區域
+        # 加入自訂標題列和主內容區域
         frame_layout.addWidget(self._create_title_bar())
         self.main_layout = QVBoxLayout() # 這是給子類別放內容的地方
         self.main_layout.setContentsMargins(15, 10, 15, 15)
         self.main_layout.setSpacing(15)
         frame_layout.addLayout(self.main_layout)
+        self._add_shadow(self) # 為 BaseDialog 本身加上陰影
 
     def _create_title_bar(self):
         self.title_bar = QWidget()
@@ -252,7 +250,6 @@ class BaseDialog(QWidget):
         close_button.setObjectName("TitleBarButton")
         close_button.setProperty("class", "CloseButton") # 用於區分懸停樣式
         close_button.setFixedSize(28, 28)
-        # --- 核心修改: 點擊關閉按鈕時，呼叫主視窗的 hide_overlay 方法 ---
         # 我們假設 parent 是 MainWindow
         if hasattr(self.main_window, 'hide_overlay'):
             close_button.clicked.connect(self.main_window.hide_overlay)
@@ -631,7 +628,6 @@ class VoiceSelectionWindow(BaseDialog):
         self.app.config.set("custom_voices", self.custom_voices_buffer)
         self.app.config.set("visible_voices", list(self.visible_voices_buffer))
         self.app.log_message("語音聲線設定已儲存。")
-        # 觸發主視窗 UI 更新
         self.app._update_ui_after_load()
         self.main_window.hide_overlay()
 
@@ -652,51 +648,33 @@ class QuickPhrasesWindow(BaseDialog):
         self._build_ui()
 
     def _build_ui(self):
-        # --- 核心內容區: 捲動列表 ---
+        # --- 核心修改: 將所有內容放入一個卡片中 ---
+        card, card_layout = self._create_card("快捷語音列表")
+
+        # --- 新增按鈕 ---
+        add_button = QPushButton("＋ 新增")
+        add_button.clicked.connect(self._add_phrase_item)
+        card_layout.addWidget(add_button, 0, Qt.AlignmentFlag.AlignRight)
+
+        # --- 捲動列表 ---
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setObjectName("Card") # 套用白色圓角卡片樣式
-        scroll_area.setStyleSheet("#Card { border: none; }")
+        scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         self.scroll_content = QWidget()
         self.scroll_layout = QVBoxLayout(self.scroll_content)
-        self.scroll_layout.setContentsMargins(10, 10, 10, 10)
         self.scroll_layout.setSpacing(10)
         self.scroll_layout.addStretch(1)
         scroll_area.setWidget(self.scroll_content)
 
         self._redraw_phrase_list()
-        self.main_layout.addWidget(scroll_area, 1) # 佔用主要空間
+        card_layout.addWidget(scroll_area, 1) # 讓捲動區佔用剩餘空間
+        self.main_layout.addWidget(card, 1) # 讓卡片佔用主要空間
 
-        # --- 底部控制區 ---
-        control_frame = QFrame() # 移除 Card，使用新的 ControlBar 樣式
-        control_frame.setObjectName("ControlBar")
-        control_layout = QHBoxLayout(control_frame)
-
-        add_button = QPushButton("＋ 新增快捷語音")
-        add_button.clicked.connect(self._add_phrase_item)
-        control_layout.addWidget(add_button)
-        control_layout.addStretch(1)
-
+        # --- 儲存按鈕 ---
         save_button = QPushButton("儲存並關閉")
         save_button.clicked.connect(self._save_and_close)
-        control_layout.addWidget(save_button)
-
-        self.main_layout.addWidget(control_frame)
-
-    def _create_title_bar(self):
-        """覆寫基底類別的方法，以移除關閉按鈕。"""
-        self.title_bar = QWidget()
-        self.title_bar.setFixedHeight(35)
-        self.title_bar.setStyleSheet("background: transparent;")
-        layout = QHBoxLayout(self.title_bar)
-        layout.setContentsMargins(15, 0, 15, 0) # 調整右邊距
-        title_label = QLabel(self.title)
-        title_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #666666;")
-        layout.addWidget(title_label)
-        layout.addStretch()
-        # 此處不再新增關閉按鈕
-        return self.title_bar
+        self.main_layout.addWidget(save_button, 0, Qt.AlignmentFlag.AlignRight)
 
     def _redraw_phrase_list(self):
         # 清空現有項目

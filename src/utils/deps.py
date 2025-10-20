@@ -41,7 +41,7 @@ CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 CACHE_DIR = os.path.join(BASE_DIR, "audio_cache")
 
 # --- 應用程式版本與更新資訊 ---
-APP_VERSION = "1.2.4"  # 您可以根據您的版本進度修改此處
+APP_VERSION = "1.2.5"  # 您可以根據您的版本進度修改此處
 GITHUB_REPO = "Alaric113/tts-with-vb-cable" # !! 請務必將 YOUR_USERNAME 替換成您的 GitHub 使用者名稱 !!
 
 CABLE_OUTPUT_HINT = "CABLE Input"

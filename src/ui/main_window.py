@@ -2,12 +2,13 @@
 # 檔案: src/ui/main_window.py
 # 功用: 定義 PyQt6 的主視窗類別 MainWindow。
 
-from PyQt6.QtWidgets import (
+from PyQt6.QtWidgets import ( # type: ignore
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QComboBox, QSlider, QFrame, QTextEdit, QSizePolicy,
-    QCheckBox, QTabWidget, QGraphicsDropShadowEffect, QGraphicsBlurEffect
+    QCheckBox, QGraphicsDropShadowEffect, QGraphicsBlurEffect, QStackedLayout,
+    QGraphicsColorizeEffect
 )
-from PyQt6.QtCore import Qt, QSize, QPoint
+from PyQt6.QtCore import Qt, QSize, QPoint, QPropertyAnimation, QEasingCurve, QRect
 from PyQt6.QtGui import QFont, QIcon, QColor
 import os
 import sys
@@ -36,6 +37,7 @@ class MainWindow(QMainWindow):
         self.app = app_controller
         self.setWindowTitle("JuMouth - TTS 語音助手")
 
+        self._blurred_widgets = [] # 新增: 用於儲存被模糊的元件
         # --- 無邊框與半透明設定 ---
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -314,43 +316,57 @@ class MainWindow(QMainWindow):
         # 3. 將容器 widget 設為 QMainWindow 的 central widget
         self.setCentralWidget(container_widget)
 
-        content_layout = QVBoxLayout(self.main_frame) # 這是圓角框架內的佈局
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(10)
+        # --- 核心重構: 分離標題列和內容區 ---
+        # 1. 建立 main_frame 的主佈局
+        main_frame_layout = QVBoxLayout(self.main_frame)
+        main_frame_layout.setContentsMargins(0, 0, 0, 0)
+        main_frame_layout.setSpacing(10)
 
-        # 建立各個區塊
-        content_layout.addWidget(self._create_title_bar())
-        
-        # 內容容器
-        body_widget = QWidget()
-        body_layout = QVBoxLayout(body_widget)
+        # 2. 將標題列直接加入主框架佈局
+        main_frame_layout.addWidget(self._create_title_bar())
+
+        # 3. 建立 QStackedLayout 來管理內容頁和覆蓋頁
+        self.stacked_layout = QStackedLayout()
+
+        # --- 第 0 層: 主內容容器 ---
+        # 實際內容的容器 (帶邊距)
+        self.body_widget = QWidget()
+        body_layout = QVBoxLayout(self.body_widget)
         body_layout.setContentsMargins(20, 10, 20, 20)
         body_layout.setSpacing(15)
-        content_layout.addWidget(body_widget)
 
         body_layout.addWidget(self._create_dashboard()) # 頂部儀表板
         body_layout.addWidget(self._create_main_content_area()) # 新的整合內容區
-        body_layout.addWidget(self._create_log_area(), 1) # 底部日誌區
+        self.log_widget = self._create_log_area() # 建立並儲存日誌區域的參照
+        body_layout.addWidget(self.log_widget) # 底部日誌區
+        self.stacked_layout.addWidget(self.body_widget)
 
         # 將 app controller 的參照指向 UI 元件
         self.app.engine_combo = self.engine_combo
         self.app.voice_combo = self.voice_combo
         self.app.local_device_combo = self.local_device_combo
 
-        # --- 新增: 覆蓋層與模糊效果 ---
-        self.overlay_widget = QWidget(self.main_frame)
+        # --- 第 1 層: 覆蓋層 ---
+        self.overlay_widget = QWidget()
         self.overlay_widget.setObjectName("Overlay")
         self.overlay_widget.setStyleSheet("#Overlay { background-color: rgba(0, 0, 0, 0.3); }")
         self.overlay_layout = QVBoxLayout(self.overlay_widget)
         self.overlay_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.overlay_widget.hide()
+        self.stacked_layout.addWidget(self.overlay_widget)
+        self.stacked_layout.setCurrentIndex(0)
 
-        # 設置初始大小
-        self.resize(720, 610) # 初始為收合狀態
+        # 4. 將堆疊佈局加入主框架佈局
+        main_frame_layout.addLayout(self.stacked_layout)
+
+        self.resize(720, 610)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             # 檢查點擊是否在標題列區域
+            # --- 修正: 確保覆蓋層顯示時，主視窗不可拖動 ---
+            if self.stacked_layout.currentIndex() == 1:
+                return
             if self.title_bar.underMouse():
                 self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
                 event.accept()
@@ -367,11 +383,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.app.on_closing()
         event.accept()
-
-    def resizeEvent(self, event):
-        """確保覆蓋層始終與主框架大小相同。"""
-        self.overlay_widget.resize(self.main_frame.size())
-        super().resizeEvent(event)
 
     def _create_title_bar(self):
         self.title_bar = QWidget()
@@ -677,6 +688,10 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.log_toggle_button)
         layout.addWidget(self._add_shadow(header_card))
 
+        # --- 核心修改: 將 log_text 提升為實例屬性 ---
+        # 這樣 app.py 才能直接控制它的可見性
+        self.log_text = QTextEdit()
+
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setObjectName("LogArea")
@@ -691,21 +706,36 @@ class MainWindow(QMainWindow):
         # 將要顯示的 widget 加入覆蓋層的佈局
         self.overlay_layout.addWidget(widget_to_show)
 
-        # 應用模糊效果
-        blur_effect = QGraphicsBlurEffect()
-        blur_effect.setBlurRadius(15)
-        self.content_widget.setGraphicsEffect(blur_effect)
+        # --- 核心修改: 只模糊卡片元件 ---
+        self._blurred_widgets.clear()
+        # 遍歷 body_widget 中的所有直接子元件
+        for child in self.body_widget.children():
+            # 檢查子元件是否為我們感興趣的 QFrame 或 QTextEdit
+            if isinstance(child, QFrame) and child.objectName() == "BubbleCard":
+                blur_effect = QGraphicsBlurEffect(blurRadius=5)
+                child.setGraphicsEffect(blur_effect)
+                self._blurred_widgets.append(child)
+            elif isinstance(child, QTextEdit) and child.objectName() == "LogArea":
+                blur_effect = QGraphicsBlurEffect(blurRadius=5)
+                child.setGraphicsEffect(blur_effect)
+                self._blurred_widgets.append(child)
 
         self.overlay_widget.show()
+        self.stacked_layout.setCurrentIndex(1)
 
     def hide_overlay(self):
         """隱藏覆蓋層並移除模糊效果。"""
-        # 移除模糊效果
-        self.content_widget.setGraphicsEffect(None)
+        # --- 核心修改: 移除所有卡片上的模糊效果 ---
+        for widget in self._blurred_widgets:
+            if widget: # 確保元件還存在
+                widget.setGraphicsEffect(None)
+        self._blurred_widgets.clear()
 
         # 從佈局中移除 widget 並刪除它
         if self.overlay_layout.count() > 0:
             widget_to_remove = self.overlay_layout.takeAt(0).widget()
             if widget_to_remove:
                 widget_to_remove.deleteLater()
+        
         self.overlay_widget.hide()
+        self.stacked_layout.setCurrentIndex(0)

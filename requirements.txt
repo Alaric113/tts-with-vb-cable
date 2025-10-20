@@ -4,6 +4,7 @@ sounddevice
 numpy
 pydub
 edge-tts
+pyinstaller
 pyttsx3
 requests
 packaging

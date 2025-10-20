@@ -78,7 +78,8 @@ def main():
             # AA_EnableHighDpiScaling 在較新的 PyQt6 版本中已過時或移除
             if hasattr(Qt.ApplicationAttribute, 'AA_EnableHighDpiScaling'):
                 QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling)
-            QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps)
+            if hasattr(Qt.ApplicationAttribute, 'AA_UseHighDpiPixmaps'):
+                QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps)
         except Exception as e:
             print(f"設定高 DPI 失敗 (可忽略): {e}")
 
