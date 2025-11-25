@@ -14,6 +14,7 @@ sounddevice
 pydub
 sherpa-onnx>=1.9.0
 soundfile
+scipy # Added for audio resampling
 
 # Windows 特定功能
 pynput

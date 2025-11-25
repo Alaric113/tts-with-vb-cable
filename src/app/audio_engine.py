@@ -15,6 +15,7 @@ import threading
 import tempfile
 import numpy as np
 import sounddevice as sd
+from scipy.signal import resample # NEW import
 from datetime import datetime
 import subprocess
 import queue
@@ -45,7 +46,7 @@ class AudioEngine:
         self.sherpa_speaker_id = 0
         self.sherpa_speakers = []
 
-        self.tts_rate = 1.0 # For Sherpa, 1.0 is default speed
+        self.tts_rate = 0.5 # For Sherpa, 1.0 is default speed
         self.tts_volume = 1.0
         self.tts_pitch = 0
 
@@ -442,18 +443,18 @@ class AudioEngine:
             try:
                 if self.current_engine == ENGINE_SHERPA_ONNX:
                     samples, sample_rate = self._synth_sherpa_onnx(text)
-                    if samples is None: return
+                    if samples is None: self.log(f"Sherpa-ONNX synthesis returned no samples for '{text[:20]}...'", "DEBUG"); return
 
                 elif self.current_engine == ENGINE_EDGE:
                     global AudioSegment
                     if AudioSegment is None: self._lazy_import()
                     samples, sample_rate = loop.run_until_complete(self._synth_edge_to_memory(text))
-                    if samples is None: return
+                    if samples is None: self.log(f"Edge-TTS synthesis returned no samples for '{text[:20]}...'", "DEBUG"); return
 
                 elif self.current_engine == ENGINE_PYTTX3:
                     if AudioSegment is None: self._lazy_import()
                     samples, sample_rate = self._synth_pyttsx3_to_memory(text)
-                    if samples is None: return
+                    if samples is None: self.log(f"pyttsx3 synthesis returned no samples for '{text[:20]}...'", "DEBUG"); return
                 
                 # Cache the newly synthesized audio
                 if samples is not None and sample_rate is not None:
@@ -465,31 +466,31 @@ class AudioEngine:
                 self.status_queue.put(("PLAY", "[❌]", f"合成失敗: {text[:20]}..."))
                 return
         # --- End Caching Logic ---
-            
-        if samples is None:
-            self.log(f"合成失敗，無法取得音訊數據: '{text[:20]}...'", "ERROR")
-            self.status_queue.put(("PLAY", "[❌]", f"合成失敗: {text[:20]}..."))
-            return
+        
+        # Add log to confirm samples are ready for playback
+        if samples is not None and sample_rate is not None:
+            self.log(f"Prepared {len(samples)} samples at SR {sample_rate} for playback.", "DEBUG")
+        else:
+            self.log(f"No samples prepared for playback for '{text[:20]}...'.", "ERROR") # Change to ERROR from original log.
+            self.status_queue.put(("PLAY", "[❌]", f"合成失敗，無法取得音訊數據: {text[:20]}..."))
+            return # Ensure to return if samples are None here
 
         self._play_audio(samples, sample_rate, text, is_preview)
 
-    @staticmethod
-    def _resample_audio(samples, current_sr, target_sr):
-        # This is a placeholder for a real resampling implementation if needed.
-        # For now, we rely on sounddevice handling it, but for multi-device, it's better to do it here.
-        # Using a library like 'resampy' would be ideal.
-        logging.warning("Resampling from %d to %d. For better quality, consider installing 'resampy'.", current_sr, target_sr)
-        # Naive resampling, just for functionality.
-        num_samples = int(len(samples) * target_sr / current_sr)
-        return np.interp(np.linspace(0, len(samples), num_samples), np.arange(len(samples)), samples)
+
 
 
     def _play_audio(self, samples, sample_rate, text, is_preview):
+        self.log(f"_play_audio called. Samples shape: {samples.shape}, SR: {sample_rate}, is_preview: {is_preview}", "DEBUG")
+
         main_device_id = self._local_output_devices.get(self.local_output_device_name, sd.default.device[1])
         listen_device_id = self._listen_devices.get(self.listen_device_name, sd.default.device[1])
         
         play_to_main = not is_preview
         play_to_listen = is_preview or self.enable_listen_to_self
+
+        self.log(f"Main Device: {self.local_output_device_name} (ID: {main_device_id}), Listen Device: {self.listen_device_name} (ID: {listen_device_id})", "DEBUG")
+        self.log(f"Play to Main: {play_to_main}, Play to Listen: {play_to_listen}", "DEBUG")
 
         # Apply master volume to main output samples
         samples_main = samples * self.tts_volume
@@ -499,6 +500,7 @@ class AudioEngine:
         try:
             main_info = sd.query_devices(main_device_id)
             main_sr = int(main_info.get('default_samplerate', sample_rate))
+            self.log(f"Main device '{main_info['name']}' (ID: {main_device_id}) default SR: {main_sr}", "DEBUG")
         except Exception:
             main_sr = sample_rate
             self.log(f"Failed to query main device {main_device_id}, using synthesized sample rate {sample_rate}", "WARNING")
@@ -506,48 +508,64 @@ class AudioEngine:
         try:
             listen_info = sd.query_devices(listen_device_id)
             listen_sr = int(listen_info.get('default_samplerate', sample_rate))
+            self.log(f"Listen device '{listen_info['name']}' (ID: {listen_device_id}) default SR: {listen_sr}", "DEBUG")
         except Exception:
             listen_sr = sample_rate
             self.log(f"Failed to query listen device {listen_device_id}, using synthesized sample rate {sample_rate}", "WARNING")
-
-        # Resample if necessary - sounddevice handles this when using OutputStream if different.
-        # However, for explicit control and potential future multi-channel mixing,
-        # manual resampling (e.g., with resampy) before feeding to stream might be better.
-        # For now, let's keep it simple and rely on sounddevice's internal resampling.
         
         streams = []
         try:
+            # Resample for main stream if necessary
+            resampled_samples_main = samples_main
+            if play_to_main and sample_rate != main_sr:
+                self.log(f"Resampling main stream from {sample_rate} Hz to {main_sr} Hz.", "DEBUG")
+                # Calculate new number of samples
+                num_samples_resampled = int(len(samples_main) * main_sr / sample_rate)
+                resampled_samples_main = resample(samples_main, num_samples_resampled)
+                
+            # Resample for listen stream if necessary
+            resampled_samples_listen = samples_listen
+            if play_to_listen and sample_rate != listen_sr:
+                self.log(f"Resampling listen stream from {sample_rate} Hz to {listen_sr} Hz.", "DEBUG")
+                # Calculate new number of samples
+                num_samples_resampled = int(len(samples_listen) * listen_sr / sample_rate)
+                resampled_samples_listen = resample(samples_listen, num_samples_resampled)
+
+
             if play_to_main:
-                self.log(f"Starting main audio stream to device {main_device_id} at SR {main_sr}", "DEBUG")
+                self.log(f"Preparing main audio stream to device {main_device_id} at SR {main_sr}", "DEBUG")
                 main_stream = sd.OutputStream(
                     samplerate=main_sr,
                     channels=1, # Assuming mono output from TTS
-                    dtype=samples_main.dtype,
+                    dtype=resampled_samples_main.dtype, # Use dtype of resampled data
                     device=main_device_id
                 )
-                streams.append((main_stream, samples_main))
+                streams.append((main_stream, resampled_samples_main, f"Main ({main_device_id})"))
             
             if play_to_listen:
-                self.log(f"Starting listen audio stream to device {listen_device_id} at SR {listen_sr}", "DEBUG")
+                self.log(f"Preparing listen audio stream to device {listen_device_id} at SR {listen_sr}", "DEBUG")
                 listen_stream = sd.OutputStream(
                     samplerate=listen_sr,
                     channels=1, # Assuming mono output from TTS
-                    dtype=samples_listen.dtype,
+                    dtype=resampled_samples_listen.dtype, # Use dtype of resampled data
                     device=listen_device_id
                 )
-                streams.append((listen_stream, samples_listen))
+                streams.append((listen_stream, resampled_samples_listen, f"Listen ({listen_device_id})"))
 
             if not streams:
                 self.log("No audio streams to play.", "DEBUG")
                 return
 
-            for stream, data in streams:
+            for stream, data, stream_name in streams:
+                self.log(f"Opening and writing to {stream_name} stream. Data shape: {data.shape}, dtype: {data.dtype}", "DEBUG")
                 with stream: # Use 'with' statement for proper resource management
                     stream.write(data)
                 self.log(f"Audio stream to device {stream.device} finished.", "DEBUG")
 
         except Exception as e:
-            self.log(f"Error during audio playback: {e}", "ERROR")
+            self.log(f"Error during audio playback to stream: {e}", "ERROR")
+            import traceback
+            self.log(traceback.format_exc(), "ERROR") # Log full traceback for better debugging
             self.status_queue.put(("PLAY", "[❌]", f"播放時發生錯誤: {e}"))
             return
 

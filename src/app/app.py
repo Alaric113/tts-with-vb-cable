@@ -180,7 +180,8 @@ class LocalTTSPlayer(QObject):
 
     def _log_message_slot(self, formatted_msg, level, mode):
         """在主執行緒中更新日誌 UI 的槽函數。"""
-        if level.upper() == 'DEBUG': return
+        # DEBUG 訊息現在會顯示，以協助診斷問題
+        # if level.upper() == 'DEBUG': return 
 
         log_widget = self.main_window.log_text
         cursor = log_widget.textCursor()
@@ -232,7 +233,7 @@ class LocalTTSPlayer(QObject):
         if IS_WINDOWS and comtypes_installed:
             pythoncom.CoInitializeEx(0)
 
-        self.log_message("開始檢查依賴...")
+        self.log_message("開始檢查依賴...", "DEBUG")
         callbacks = {
             "log": lambda msg, level="INFO": self.log_message(msg, level),
             "status": lambda icon, msg, level="INFO": self.signals.audio_status.emit(level, icon, msg),
@@ -254,7 +255,7 @@ class LocalTTSPlayer(QObject):
                 dm.prepare_vbcable_setup(have_setup, need_run)
                 return
 
-            self.log_message("檢查 TTS 模型...")
+            self.log_message("檢查 TTS 模型...", "DEBUG")
             model_downloader = ModelDownloader(log=callbacks["log"], status=callbacks["status"], ask_yes_no_sync=callbacks["ask_yes_no_sync"])
             model_downloader.ensure_model("sherpa-vits-zh-aishell3")
 
@@ -271,7 +272,7 @@ class LocalTTSPlayer(QObject):
             
             self.audio.load_devices()
             self.signals.update_ui_after_load.emit()
-            self.log_message("依賴與設備載入完成。")
+            self.log_message("依賴與設備載入完成。", "DEBUG")
 
             self.main_window.start_button.setEnabled(True)
 
