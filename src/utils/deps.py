@@ -40,6 +40,8 @@ BASE_DIR = get_base_path()
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 CACHE_DIR = os.path.join(BASE_DIR, "audio_cache")
 
+TTS_MODELS_DIR = os.path.join(BASE_DIR, "tts_models")
+
 # --- 應用程式版本與更新資訊 ---
 APP_VERSION = "1.2.5"  # 您可以根據您的版本進度修改此處
 GITHUB_REPO = "Alaric113/tts-with-vb-cable" # !! 請務必將 YOUR_USERNAME 替換成您的 GitHub 使用者名稱 !!
@@ -52,6 +54,8 @@ VB_CABLE_DOWNLOAD_URL = "https://download.vb-audio.com/Download_CABLE/VBCABLE_Dr
 DEFAULT_EDGE_VOICE = "zh-CN-XiaoxiaoNeural"
 ENGINE_EDGE   = "edge-tts"
 ENGINE_PYTTX3 = "pyttsx3"
+ENGINE_SHERPA_ONNX = "sherpa-onnx"
+ENGINE_CHAT_TTS = "ChatTTS (experimental)"
 
 FFMPEG_DIR = os.path.join(BASE_DIR, "ffmpeg")
 FFMPEG_BIN_DIR = os.path.join(FFMPEG_DIR, "bin")
@@ -192,6 +196,67 @@ def extract_ffmpeg_zip(zip_path: str, target_bin_dir: str, progress_cb=None, sta
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
 # ================= 依賴處理（以回呼解耦 UI） =================
+import tarfile
+from pathlib import Path
+from ..app.model_manager import PREDEFINED_MODELS
+
+def extract_tar_bz2(tar_path: str, target_dir: str, progress_cb=None, log_cb=None):
+    ensure_dir(target_dir)
+    with tempfile.TemporaryDirectory() as tmp_extract_dir:
+        # 1. Extract all contents to a temporary directory
+        with tarfile.open(tar_path, "r:bz2") as tf:
+            tf.extractall(path=tmp_extract_dir)
+
+        # 2. Check the contents of the temporary directory
+        extracted_items = os.listdir(tmp_extract_dir)
+        source_dir = tmp_extract_dir
+        
+        # 3. If there is a single directory inside, assume it's the root and move its contents
+        if len(extracted_items) == 1 and os.path.isdir(os.path.join(tmp_extract_dir, extracted_items[0])):
+            source_dir = os.path.join(tmp_extract_dir, extracted_items[0])
+            if log_cb:
+                log_cb(f"Archive has a root directory: '{extracted_items[0]}'. Moving contents.", "INFO")
+
+        # 4. Move all files and subdirectories from the source directory to the final target directory
+        for item_name in os.listdir(source_dir):
+            s = os.path.join(source_dir, item_name)
+            d = os.path.join(target_dir, item_name)
+            
+            # Overwrite existing files/dirs in the destination
+            if os.path.exists(d):
+                if os.path.isdir(d):
+                    shutil.rmtree(d)
+                else:
+                    os.remove(d)
+            shutil.move(s, d)
+
+    if progress_cb:
+        progress_cb(1.0, "模型解壓縮完成。")
+
+def check_model_downloaded(model_id: str) -> bool:
+    if model_id not in PREDEFINED_MODELS:
+        return False
+    model_config = PREDEFINED_MODELS[model_id]
+    model_dir = Path(TTS_MODELS_DIR) / model_id
+    if not model_dir.exists():
+        return False
+    required_files = [model_dir / fname for fname in model_config["file_names"]]
+    return all(f.exists() for f in required_files)
+
+def delete_model(model_id: str, log_cb=None):
+    if model_id not in PREDEFINED_MODELS:
+        if log_cb: log_cb(f"試圖刪除一個未定義的模型: {model_id}", "WARN")
+        return
+    try:
+        model_dir = Path(TTS_MODELS_DIR) / model_id
+        if model_dir.exists():
+            shutil.rmtree(model_dir)
+            if log_cb: log_cb(f"模型 '{model_id}' 已被刪除。", "INFO")
+        else:
+            if log_cb: log_cb(f"模型 '{model_id}' 不存在，無需刪除。", "INFO")
+    except Exception as e:
+        if log_cb: log_cb(f"刪除模型 '{model_id}' 時發生錯誤: {e}", "ERROR")
+
 class DependencyManager:
     def __init__(self, log, status, ask_yes_no_sync, ask_yes_no_async, show_info, show_error, startupinfo=None):
         """
@@ -339,3 +404,65 @@ class DependencyManager:
                 self.show_error("錯誤", f"下載 VB-CABLE 失敗: {e}")
 
         self.ask_yes_no_async("VB-CABLE 安裝助手", "未偵測到 VB-CABLE 驅動，且找不到安裝程式。\n\n是否要從官方網站自動下載 VB-CABLE 安裝包？", on_user_choice)
+
+class ModelDownloader:
+    def __init__(self, log, status, ask_yes_no_sync):
+        self.log = log
+        self.status = status
+        self.ask_yes_no_sync = ask_yes_no_sync
+
+    def ensure_model(self, model_id: str) -> bool:
+        if model_id not in PREDEFINED_MODELS:
+            self.log(f"未知的模型 ID: {model_id}", "ERROR")
+            return False
+
+        model_config = PREDEFINED_MODELS[model_id]
+        model_dir = Path(TTS_MODELS_DIR) / model_id
+        required_files = [model_dir / fname for fname in model_config["file_names"]]
+        
+        if all(f.exists() for f in required_files):
+            self.log(f"模型 '{model_id}' 已存在。", "INFO")
+            return True
+
+        self.status("[!]", f"TTS 模型 '{model_id}' 不完整或不存在。", "WARN")
+        do_download = self.ask_yes_no_sync("模型下載", f"Sherpa-ONNX 引擎需要下載 TTS 模型 '{model_id}'。\n\n是否要自動下載模型 (約 80-150MB)？")
+
+        if not do_download:
+            self.log("使用者取消下載模型。", "WARN")
+            return False
+
+        try:
+            ensure_dir(model_dir)
+            download_url = model_config["download_url"]
+            file_ext = "".join(Path(download_url).suffixes)
+            
+            with tempfile.TemporaryDirectory(prefix="model_dl_") as temp_download_dir:
+                archive_path = Path(temp_download_dir) / f"{model_id}{file_ext}"
+
+                self.status("[↓]", f"準備從網路下載模型 '{model_id}'…", "INFO")
+                download_with_progress(
+                    download_url, str(archive_path),
+                    progress_cb=lambda p, t: self.status("[↓]", t, "INFO")
+                )
+                
+                self.status("[unpacking]", "模型下載完成，準備解壓…", "INFO")
+                
+                if download_url.endswith(".tar.bz2"):
+                    extract_tar_bz2(
+                        str(archive_path), str(model_dir),
+                        progress_cb=lambda p, t: self.status("[unpacking]", t, "INFO"),
+                        log_cb=self.log
+                    )
+                else:
+                    self.log(f"不支援的壓縮格式: {download_url}", "ERROR")
+                    return False
+
+            if all(f.exists() for f in required_files):
+                self.log(f"模型 '{model_id}' 已成功下載並解壓。", "INFO")
+                return True
+            else:
+                self.log(f"解壓後模型檔案仍不完整，請手動檢查。", "ERROR")
+                return False
+        except Exception as e:
+            self.log(f"下載或解壓模型 '{model_id}' 失敗: {e}", "ERROR")
+            return False

@@ -40,3 +40,4 @@ config.json
 _old_versions/
 JuMouth_update.zip
 *.zip
+/tts_models

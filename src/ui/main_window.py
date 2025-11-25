@@ -525,7 +525,7 @@ class MainWindow(QMainWindow):
         sel_layout.setSpacing(10)
         sel_layout.addWidget(QLabel("TTS 引擎:"))
         self.engine_combo = QComboBox()
-        self.engine_combo.addItems([self.app.ENGINE_EDGE, self.app.ENGINE_PYTTX3])
+        self.engine_combo.addItems([self.app.ENGINE_SHERPA_ONNX, self.app.ENGINE_EDGE, self.app.ENGINE_PYTTX3, self.app.ENGINE_CHAT_TTS])
         self.engine_combo.setCurrentText(self.app.audio.current_engine)
         self.engine_combo.currentTextChanged.connect(self.app._on_engine_change)
         sel_layout.addWidget(self.engine_combo)
@@ -534,7 +534,7 @@ class MainWindow(QMainWindow):
         self.voice_combo = QComboBox()
         self.voice_combo.addItem("正在載入...")
         self.voice_combo.setEnabled(False)
-        self.voice_combo.currentTextChanged.connect(self.app._on_voice_change)
+        self.voice_combo.currentTextChanged.connect(self.app.on_voice_change)
         sel_layout.addWidget(self.voice_combo)
         sel_layout.addStretch(1)
         return sel_frame
@@ -554,7 +554,7 @@ class MainWindow(QMainWindow):
 
         self.speed_slider = WheelAdjustableSlider(Qt.Orientation.Vertical)
         self.speed_slider.setRange(100, 250)
-        self.speed_slider.setValue(self.app.audio.tts_rate)
+        self.speed_slider.setValue(int(self.app.audio.tts_rate))
         self.speed_slider.valueChanged.connect(self.app.update_tts_settings)
 
         speed_layout.addWidget(self.speed_slider, 1) # stretch=1, 移除置中對齊以填滿空間
@@ -652,9 +652,9 @@ class MainWindow(QMainWindow):
         self.quick_phrase_button.clicked.connect(self.app._open_quick_phrases_window)
         actions_layout.addWidget(self.quick_phrase_button, 1, 0)
 
-        self.voice_settings_button = QPushButton("語音聲線設定")
-        self.voice_settings_button.clicked.connect(self.app._open_voice_selection_window)
-        actions_layout.addWidget(self.voice_settings_button, 1, 1)
+        self.model_management_button = QPushButton("模型管理")
+        self.model_management_button.clicked.connect(self.app._open_model_management_window)
+        actions_layout.addWidget(self.model_management_button, 1, 1)
 
         self.settings_button = QPushButton("其它設定")
         self.settings_button.clicked.connect(self.app._open_settings_window)

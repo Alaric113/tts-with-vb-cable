@@ -8,9 +8,11 @@ from PyQt6.QtWidgets import ( # type: ignore
     QFrame, QDialogButtonBox, QMessageBox, QScrollArea, QRadioButton, QGraphicsDropShadowEffect
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPoint, QSize
-from PyQt6.QtGui import QFont, QIntValidator, QIcon, QColor
+from PyQt6.QtGui import QFont, QIcon, QColor
 
-from ..utils.deps import APP_VERSION
+from ..utils.deps import APP_VERSION, check_model_downloaded
+from ..app.model_manager import PREDEFINED_MODELS
+
 
 class BaseDialog(QWidget):
     """所有彈出對話框的基類，提供統一的外觀和行為。"""
@@ -32,6 +34,8 @@ class BaseDialog(QWidget):
         self.BORDER_COLOR = "#EAEAEA"
         self.STATUS_ORANGE_COLOR = "#FF9500"
         self.STATUS_RED_COLOR = "#FF3B30"
+        self.STATUS_GREEN_COLOR = "#34C759"
+
 
         # 顏色 (RGB for alpha)
         self.BG_COLOR_RGB = "247, 249, 252"
@@ -67,6 +71,9 @@ class BaseDialog(QWidget):
                 background-color: transparent;
                 color: {self.TEXT_COLOR};
             }}
+            QLabel#StatusLabel {{
+                font-weight: bold;
+            }}
             QLineEdit {{
                 border: 1px solid {self.BORDER_COLOR};
                 border-radius: 8px;
@@ -88,6 +95,14 @@ class BaseDialog(QWidget):
             QPushButton:disabled {{
                 background-color: {self.DISABLED_BG_COLOR};
                 color: {self.DISABLED_TEXT_COLOR};
+            }}
+            QPushButton#DownloadButton {{
+                background-color: {self.ACCENT_COLOR};
+                color: {self.ACCENT_TEXT_COLOR};
+            }}
+            QPushButton#DeleteButton {{
+                background-color: {self.STATUS_RED_COLOR};
+                color: {self.ACCENT_TEXT_COLOR};
             }}
             QComboBox {{
                 padding: 8px;
@@ -120,7 +135,7 @@ class BaseDialog(QWidget):
                 border: 1px solid {self.BORDER_COLOR};
             }}
             /* --- 新增: 快捷語音項目卡片樣式 --- */
-            QFrame#PhraseItemCard {{
+            QFrame#PhraseItemCard, QFrame#ModelItemCard {{
                 background-color: rgba(255, 255, 255, 0.7);
                 border-radius: 12px;
             }}
@@ -388,6 +403,152 @@ class SettingsWindow(BaseDialog):
         self.listen_volume_label.setText(f"{value}%")
         self.app.config.set("listen_volume", self.audio.listen_volume)
 
+class QuickInputWindow(QWidget):
+    def __init__(self, app_controller):
+        super().__init__()
+        self.app = app_controller
+        self.history_index = -1
+
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+
+        self.entry = QLineEdit(self)
+        # 從主視窗讀取樣式變數
+        bg_color_rgb = self.app.main_window.QUICK_INPUT_BG_COLOR
+        opacity = self.app.main_window.QUICK_INPUT_OPACITY
+
+        self.entry.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: rgba({bg_color_rgb}, {opacity});
+                color: #FFFFFF;
+                border: 1px solid #0078D7;
+                border-radius: 5px;
+                padding: 8px;
+                font-size: 16px;
+            }}
+        """)
+        self.layout.addWidget(self.entry)
+
+        self.entry.returnPressed.connect(self.app.send_quick_input)
+        self.entry.installEventFilter(self)
+
+    def eventFilter(self, source, event):
+        if event.type() == event.Type.KeyPress:
+            if event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+                self.app.handle_quick_input_history(self.entry, event.key())
+                return True
+            elif event.key() == Qt.Key.Key_Escape:
+                self.close()
+                return True
+        return super().eventFilter(source, event)
+
+    def focusOutEvent(self, event):
+        self.close()
+        super().focusOutEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.entry.setFocus()
+        self.entry.selectAll()
+
+    def closeEvent(self, event):
+        if self.app and self.app.quick_input_window:
+             self.app.quick_input_window = None
+        super().closeEvent(event)
+
+class ModelManagementWindow(BaseDialog):
+    def __init__(self, parent, app_controller):
+        super().__init__(parent, "模型管理", 600, 400)
+        self.app = app_controller
+        self.ui_elements = {}
+        self._build_ui()
+
+    def _build_ui(self):
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        scroll_content = QWidget()
+        self.scroll_layout = QVBoxLayout(scroll_content)
+        self.scroll_layout.setContentsMargins(0, 0, 0, 0)
+        self.scroll_layout.setSpacing(10)
+        
+        self.main_layout.addWidget(scroll_area)
+        scroll_area.setWidget(scroll_content)
+
+        self.refresh_model_list()
+
+    def refresh_model_list(self):
+        # Clear existing widgets
+        while self.scroll_layout.count():
+            item = self.scroll_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.ui_elements.clear()
+
+        # Rebuild list
+        for model_id, model_config in PREDEFINED_MODELS.items():
+            self._create_model_item_widget(model_id, model_config)
+
+        self.scroll_layout.addStretch(1)
+
+    def _create_model_item_widget(self, model_id, model_config):
+        card = QFrame()
+        card.setObjectName("ModelItemCard")
+        layout = QHBoxLayout(self._add_shadow(card))
+        layout.setSpacing(15)
+
+        name_label = QLabel(model_id)
+        name_label.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        layout.addWidget(name_label, 1)
+
+        status_label = QLabel()
+        status_label.setObjectName("StatusLabel")
+        layout.addWidget(status_label)
+
+        download_button = QPushButton("下載")
+        download_button.setObjectName("DownloadButton")
+        download_button.clicked.connect(lambda: self.app.download_model(model_id))
+        
+        delete_button = QPushButton("刪除")
+        delete_button.setObjectName("DeleteButton")
+        delete_button.clicked.connect(lambda: self.app.delete_model(model_id))
+
+        layout.addWidget(download_button)
+        layout.addWidget(delete_button)
+
+        self.ui_elements[model_id] = {
+            "card": card,
+            "status_label": status_label,
+            "download_button": download_button,
+            "delete_button": delete_button,
+        }
+        
+        self.scroll_layout.addWidget(card)
+        self._update_model_item_status(model_id)
+
+    def _update_model_item_status(self, model_id):
+        if model_id not in self.ui_elements:
+            return
+
+        widgets = self.ui_elements[model_id]
+        is_downloaded = check_model_downloaded(model_id)
+
+        if is_downloaded:
+            widgets["status_label"].setText("已下載")
+            widgets["status_label"].setStyleSheet(f"color: {self.STATUS_GREEN_COLOR};")
+            widgets["download_button"].hide()
+            widgets["delete_button"].show()
+        else:
+            widgets["status_label"].setText("未下載")
+            widgets["status_label"].setStyleSheet(f"color: {self.STATUS_ORANGE_COLOR};")
+            widgets["download_button"].show()
+            widgets["delete_button"].hide()
+
 class AddCustomVoiceDialog(QDialog):
     """一個用於新增或編輯自訂語音的小對話框。"""
     def __init__(self, parent, app_controller, existing_voice=None):
@@ -630,7 +791,7 @@ class VoiceSelectionWindow(BaseDialog):
         self.app.log_message("語音聲線設定已儲存。")
         self.app._update_ui_after_load()
         self.main_window.hide_overlay()
-
+        
 class QuickPhrasesWindow(BaseDialog):
     # 新增: 用於跨執行緒安全更新 UI 的信號
     # 參數: (int: 項目索引, str: 新的快捷鍵, str: 衝突訊息)
@@ -835,62 +996,3 @@ class QuickPhrasesWindow(BaseDialog):
             self.ui_elements[index]["hotkey_button"].setChecked(False)
             button.blockSignals(False)
             self._finalize_recording(index)
-
-class QuickInputWindow(QWidget):
-    def __init__(self, app_controller):
-        super().__init__()
-        self.app = app_controller
-        self.history_index = -1
-
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
-
-        self.entry = QLineEdit(self)
-        # 從主視窗讀取樣式變數
-        bg_color_rgb = self.app.main_window.QUICK_INPUT_BG_COLOR
-        opacity = self.app.main_window.QUICK_INPUT_OPACITY
-
-        self.entry.setStyleSheet(f"""
-            QLineEdit {{
-                background-color: rgba({bg_color_rgb}, {opacity});
-                color: #FFFFFF;
-                border: 1px solid #0078D7;
-                border-radius: 5px;
-                padding: 8px;
-                font-size: 16px;
-            }}
-        """)
-        self.layout.addWidget(self.entry)
-
-        self.entry.returnPressed.connect(self.app.send_quick_input)
-        self.entry.installEventFilter(self)
-
-        QTimer.singleShot(100, self.app.release_input_window_lock)
-
-    def eventFilter(self, source, event):
-        if event.type() == event.Type.KeyPress:
-            if event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
-                self.app.handle_quick_input_history(self.entry, event.key())
-                return True
-            elif event.key() == Qt.Key.Key_Escape:
-                self.close()
-                return True
-        return super().eventFilter(source, event)
-
-    def focusOutEvent(self, event):
-        self.close()
-        super().focusOutEvent(event)
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        self.entry.setFocus()
-        self.entry.selectAll()
-
-    def closeEvent(self, event):
-        self.app.release_input_window_lock()
-        self.app.quick_input_window = None
-        super().closeEvent(event)

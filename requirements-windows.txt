@@ -12,6 +12,8 @@ kokoro>=0.8.2
 misaki[zh]>=0.8.2
 sounddevice
 pydub
+sherpa-onnx>=1.9.0
+soundfile
 
 # Windows 特定功能
 pynput
