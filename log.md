@@ -273,18 +273,76 @@ pip install -r requirements-windows.txt
 **生成者：** Gemini CLI Agent
 ---
 
-## Agent Memory
+### **2025年11月25日-2 更新記錄**
 
-(For Gemini Agent use. Records high-level context to maintain continuity.)
+**修改目的與背景：**
+為了解決 Sherpa-ONNX 模型載入問題、改進 UI/UX 以及修復在重構過程中引入的各種錯誤。
 
-### Session: 2025-11-25
+**所涉及的檔案和模組：**
+- `src/utils/deps.py`
+- `src/app/model_manager.py`
+- `src/app/app.py`
+- `src/app/audio_engine.py`
+- `src/ui/popups.py`
+- `src/ui/main_window.py`
 
-*   **Summary:**
-    *   **Initial `TypeError` Fix:** Removed an unexpected `parent` argument from `QuickInputWindow` constructor in `src/app/app.py`.
-    *   **Hotkey Editing Implementation:** Implemented missing hotkey editing logic in `src/app/app.py` (for the main quick input) and modified `src/ui/main_window.py` to make the hotkey edit button checkable, improving UX.
-    *   **Quick Input Positioning:** Corrected quick input window's positioning to be screen-relative in `src/app/app.py` based on user settings.
-    *   **`AttributeError` Fix:** Resolved `AttributeError: 'MainWindow' object has no attribute 'hotkey_label'` by replacing a button group with the expected `QLabel` in `_create_hotkey_card` in `src/ui/main_window.py`.
-    *   **Robust Hotkey Validation:** Hardened the hotkey system to prevent crashes from invalid (e.g., modifier-only) hotkeys saved in the user's config. The validation in `_start_hotkey_listener` in `app.py` now also clears invalid keys from the configuration to prevent the issue from recurring.
-    *   **Model Extraction Debugging:** Added detailed file logging to the `extract_tar_bz2` function in `src/utils/deps.py` to diagnose a "model files incomplete" error. Awaiting new logs from the user to analyze the archive's structure.
-*   **Key Files Modified:** `src/app/app.py`, `src/ui/main_window.py`, `src/ui/popups.py`, `src/utils/deps.py`.
-*   **Project Insight:** This `log.md` file serves as my session memory. Consistency between UI and logic is crucial. Hotkey validation must handle both setting and loading. When debugging file issues, adding logging to inspect intermediate states is an effective strategy.
+**所做的具體更改（高層次概述）：**
+
+1.  **Sherpa-ONNX 模型處理重構為「模型即引擎」架構：**
+    *   **背景：** 用戶希望每個 Sherpa-ONNX 模型在 UI 中都作為一個獨立的引擎選項，而不是在一個通用 Sherpa-ONNX 引擎下選擇多個聲線。
+    *   **`src/utils/deps.py`**:
+        *   移除了通用常數 `ENGINE_SHERPA_ONNX`。
+        *   為每個 Sherpa-ONNX 模型新增了獨立的引擎常數 (例如 `ENGINE_SHERPA_VITS_ZH_AISHELL3`, `ENGINE_VITS_PIPER_EN_US_GLADOS`)。
+    *   **`src/app/model_manager.py`**:
+        *   更新了 `PREDEFINED_MODELS`，使每個 Sherpa-ONNX 模型的 `engine` 字段與其 `id` 相同。
+        *   根據官方文檔詳細解析，校正了 `file_names` 列表，確保包含所有必需文件 (例如 `rule.far`, `lexicon.txt` 的有無, 以及 `espeak-ng-data` 目錄)。
+        *   為模型添加了 `language`, `speakers`, `filesize_mb` 等元數據，以豐富模型管理介面的顯示。
+    *   **`src/app/audio_engine.py`**:
+        *   將 `init_sherpa_onnx` 重命名為 `_init_sherpa_onnx_runtime`，使其僅負責初始化 Sherpa-ONNX 運行時環境。
+        *   新增 `_load_sherpa_onnx_voice` 方法，專責載入特定 Sherpa-ONNX 模型，包括文件完整性檢查和 `sherpa_onnx.OfflineTts` 實例化。
+        *   更新 `get_voice_names`, `set_current_voice`, `set_rate_volume` 方法，使其能正確判斷當前引擎是否為 Sherpa-ONNX 模型引擎。
+        *   **實作臨時文件複製工作區 (Workaround)：** 為解決 Sherpa-ONNX 庫可能存在的非 ASCII 路徑問題，當載入 Sherpa-ONNX 模型時，會將所有相關文件複製到一個臨時的 ASCII 安全路徑下進行載入，並在不再需要時自動清理。
+        *   增強了 `_load_sherpa_onnx_voice` 中的調試日誌，詳盡輸出模型載入參數。
+        *   修復了 `NameError: name 'shutil' is not defined` 和 `NameError: name 'tempfile' is not defined` (遺漏了 `shutil` 和 `tempfile` 的導入)。
+        *   修復了 `AttributeError: 'AudioEngine' object has no attribute 'status_queue'` (多處 `self.status_queue` 誤寫為 `self.audio_status_queue`)。
+        *   `self.current_engine` 預設值調整為 `ENGINE_PYTTX3`，以適應新的引擎常數。
+        *   動態判斷 `.onnx` 模型文件名，而不是硬編碼。
+    *   **`src/app/app.py`**:
+        *   更新了引擎常數的導入。
+        *   新增 `LocalTTSPlayer.get_sherpa_onnx_engines()` 方法，用於動態獲取已下載的 Sherpa-ONNX 模型作為可用的引擎列表。
+        *   修改 `_on_engine_change`, `on_voice_change`, `_update_ui_after_load` 方法以適應新的「模型即引擎」架構。
+        *   實例化 `self.model_downloader` 並連接其 `download_progress_signal` 到 `_on_model_download_progress` 方法。
+        *   修改 `_download_model_thread`，使其使用 `self.model_downloader` 並在下載成功後發出 `update_ui_after_load` 信號 (帶 `model_id` 參數) 以刷新 UI。
+        *   新增 `_on_model_download_progress` 方法，作為 `LocalTTSPlayer` 的槽，用於接收下載進度。
+        *   修復了 `NameError: name 'PREDEFINED_MODELS' is not defined` 和 `NameError: name 'check_model_downloaded' is not defined` (遺漏了相關的導入)。
+        *   修復了 `SyntaxError: invalid syntax` (在 `LocalTTSPlayer.__init__` 中錯誤放置 `get_sherpa_onnx_engines` 方法定義)。
+
+2.  **錯誤處理與穩定性增強：**
+    *   在 `src/utils/deps.py` 的 `DependencyManager.__init__` 中新增了對 `TTS_MODELS_DIR` 路徑中非 ASCII 字元的警告，提醒用戶可能因路徑問題導致模型載入失敗。
+    *   修改 `ModelDownloader.ensure_model`，在模型文件不完整時，明確日誌輸出缺少的具體文件。
+
+3.  **UI/UX 改進：**
+    *   **模型管理視窗 (src/ui/popups.py)**:
+        *   重新設計了 `_create_model_item_widget`，利用 `QGridLayout` 優化模型信息 (語言、講者數、文件大小) 的顯示佈局，使其更具吸引力。
+        *   為每個模型項目引入了 **下載進度條 (QProgressBar)**，並透過信號機制動態更新其進度和狀態。
+        *   修復了 `NameError: name 'QProgressBar' is not defined` (遺漏了 `QProgressBar` 的導入)。
+    *   **主視窗 (src/ui/main_window.py)**:
+        *   校正了 `_create_tts_selection_card` 中的引擎下拉選單的填充邏輯，確保其正確顯示所有可用引擎。
+        *   音量滑塊的範圍調整為 0-200 (代表 0.0-2.0)，以提供更大的調整彈性，且 1.0 變為中位數。
+        *   `update_tts_settings` 中處理 Sherpa-ONNX 引擎時，音高顯示為 "N/A" 並重設為 0，以匹配其禁用狀態。
+    *   **引擎下拉選單動態更新：** 實作了在模型成功下載後，主視窗引擎下拉選單自動更新並選中新模型的邏輯。
+
+4.  **設置持久化：**
+    *   在 `src/app/app.py` 的 `LocalTTSPlayer.on_closing` 方法中添加 `self.config.save()`，確保應用程式正常關閉時所有配置都能被正確保存。
+
+**新增的依賴項或配置：**
+- `shutil` (用於文件複製)
+- `tempfile` (用於臨時目錄管理)
+
+**對於下一個階段的代理或開發者來說，需要了解的任何重要事項：**
+- `vits-zh-hf-theresa` 模型文件在下載後報告缺少 `rule.far`，已從 `PREDEFINED_MODELS` 中移除該文件，等待用戶測試是否能載入。
+- `vits-piper-en_US-glados` 模型在測試環境中仍然出現 `No graph was found in the protobuf` 錯誤，儘管已實作臨時路徑工作區。這可能暗示該模型的 `lexicon.txt` 文件在特定情況下仍被 `sherpa-onnx` 庫預期，或模型本身仍有其他未知兼容性問題。
+
+**生成日期：** 2025年11月25日
+**生成者：** Gemini CLI Agent
+---

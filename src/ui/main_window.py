@@ -525,7 +525,12 @@ class MainWindow(QMainWindow):
         sel_layout.setSpacing(10)
         sel_layout.addWidget(QLabel("TTS 引擎:"))
         self.engine_combo = QComboBox()
-        self.engine_combo.addItems([self.app.ENGINE_SHERPA_ONNX, self.app.ENGINE_EDGE, self.app.ENGINE_PYTTX3, self.app.ENGINE_CHAT_TTS])
+        engine_list = [
+            self.app.ENGINE_EDGE,
+            self.app.ENGINE_PYTTX3,
+            self.app.ENGINE_CHAT_TTS
+        ] + self.app.get_sherpa_onnx_engines()
+        self.engine_combo.addItems(engine_list)
         self.engine_combo.setCurrentText(self.app.audio.current_engine)
         self.engine_combo.currentTextChanged.connect(self.app._on_engine_change)
         sel_layout.addWidget(self.engine_combo)
@@ -570,7 +575,7 @@ class MainWindow(QMainWindow):
         volume_layout.addWidget(QLabel("音量"), 0, Qt.AlignmentFlag.AlignCenter) # 標題
 
         self.volume_slider = WheelAdjustableSlider(Qt.Orientation.Vertical)
-        self.volume_slider.setRange(50, 100) # 0.5 to 1.0
+        self.volume_slider.setRange(0, 200) # 0.0 to 2.0, with 100 as 1.0
         self.volume_slider.setValue(int(self.app.audio.tts_volume * 100))
         self.volume_slider.valueChanged.connect(self.app.update_tts_settings)
 

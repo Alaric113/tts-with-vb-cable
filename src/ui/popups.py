@@ -5,7 +5,8 @@
 from PyQt6.QtWidgets import ( # type: ignore
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout, QMainWindow,
     QLabel, QPushButton, QComboBox, QSlider, QCheckBox, QLineEdit,
-    QFrame, QDialogButtonBox, QMessageBox, QScrollArea, QRadioButton, QGraphicsDropShadowEffect
+    QFrame, QDialogButtonBox, QMessageBox, QScrollArea, QRadioButton, QGraphicsDropShadowEffect,
+    QProgressBar # NEW: Import QProgressBar
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPoint, QSize
 from PyQt6.QtGui import QFont, QIcon, QColor
@@ -27,35 +28,34 @@ class BaseDialog(QWidget):
         self.setObjectName("BaseDialogFrame")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         
-        # --- 獨立的彈出視窗樣式定義 ---
-        self.TEXT_COLOR = "#333333"
-        self.ACCENT_COLOR = "#007AFF"
-        self.ACCENT_TEXT_COLOR = "#FFFFFF"
-        self.BORDER_COLOR = "#EAEAEA"
-        self.STATUS_ORANGE_COLOR = "#FF9500"
-        self.STATUS_RED_COLOR = "#FF3B30"
-        self.STATUS_GREEN_COLOR = "#34C759"
-
+        self.text_color = "#333333"           # 主要文字 (深灰)
+        self.secondary_text_color = "#888888" # 次要文字 (中灰)
+        self.accent_color = "#007AFF"         # 主要強調色 (蘋果藍)
+        self.accent_text_color = "#FFFFFF"    # 強調色上的文字 (白色)
+        self.border_color = "#EAEAEA"         # 邊框顏色 (更柔和的灰色)
+        self.status_orange_color = "#FF9500"  # 已停止 (蘋果橘)
+        self.status_red_color = "#FF3B30"     # 錯誤/停止按鈕 (蘋果紅)
+        self.status_green_color = "#34C759"   # 運行中 (蘋果綠)
 
         # 顏色 (RGB for alpha)
-        self.BG_COLOR_RGB = "247, 249, 252"
-        self.CARD_BG_COLOR_RGB = "255, 255, 255"
-        self.SUB_CARD_BG_COLOR_RGB = "255, 255, 255" # 根據設計稿，子卡片也是白色
+        self.bg_color_rgb = "247, 249, 252"
+        self.card_bg_color_rgb = "255, 255, 255"
+        self.sub_card_bg_color_rgb = "255, 255, 255" # 根據設計稿，子卡片也是白色
 
         # 透明度
-        self.CARD_OPACITY = 0.9
-        self.SUB_CARD_OPACITY = 1.0
+        self.card_opacity = 0.9
+        self.sub_card_opacity = 1.0
 
         # 元件顏色
-        self.BUTTON_BG_COLOR = "#E9E9EB"
-        self.BUTTON_HOVER_COLOR = "#DCDFE4"
-        self.SLIDER_GROOVE_COLOR = "#E9E9EB"
-        self.DISABLED_TEXT_COLOR = "#B0B0B0"
-        self.DISABLED_BG_COLOR = "#F0F2F5"
+        self.button_bg_color = "#E9E9EB"
+        self.button_hover_color = "#DCDFE4"
+        self.slider_groove_color = "#E9E9EB"
+        self.disabled_text_color = "#B0B0B0"
+        self.disabled_bg_color = "#F0F2F5"
         
         # 新增: 根據設計稿的顏色
-        self.INPUT_BG_COLOR = "#E0E0E0"
-        self.KEY_LABEL_BG_COLOR = "#CCCCCC"
+        self.input_bg_color = "#E0E0E0"
+        self.key_label_bg_color = "#CCCCCC"
 
         # --- 樣式表 ---
         self.setStyleSheet(f"""
@@ -468,6 +468,21 @@ class ModelManagementWindow(BaseDialog):
         self._build_ui()
 
     def _build_ui(self):
+        # --- Header Card with Title and Refresh Button ---
+        header_card, header_layout = self._create_card()
+        header_layout.setContentsMargins(15, 10, 15, 10)
+        header_layout.setDirection(QHBoxLayout.Direction.LeftToRight) # Ensure horizontal alignment
+        title_label = QLabel("可用的 Sherpa-ONNX 模型")
+        title_label.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+        header_layout.addWidget(title_label)
+        header_layout.addStretch(1) # Push button to the right
+        
+        refresh_button = QPushButton("刷新列表")
+        refresh_button.clicked.connect(self.refresh_model_list)
+        header_layout.addWidget(refresh_button)
+        self.main_layout.addWidget(header_card)
+
+        # --- Scroll Area for Model List ---
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
@@ -499,44 +514,82 @@ class ModelManagementWindow(BaseDialog):
     def _create_model_item_widget(self, model_id, model_config):
         card = QFrame()
         card.setObjectName("ModelItemCard")
-        layout = QHBoxLayout(self._add_shadow(card))
-        layout.setSpacing(10) # Reduce spacing slightly for a more compact look
-        layout.setContentsMargins(15, 10, 15, 10) # Add some padding inside the card
+        
+        # Use a QGridLayout for a more structured layout within the card
+        card_layout = QGridLayout(self._add_shadow(card)) # Apply shadow to the card itself
+        card_layout.setContentsMargins(15, 10, 15, 10)
+        card_layout.setHorizontalSpacing(10)
+        card_layout.setVerticalSpacing(5)
 
+        # Model ID (as prominent title)
         name_label = QLabel(model_id)
-        name_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold)) # Slightly smaller font
-        layout.addWidget(name_label) # Removed stretch to make space for description
+        name_label.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        card_layout.addWidget(name_label, 0, 0, 1, 3) # Span across columns
 
-        # Add a small description or language if available and relevant
-        if model_config.get("description"):
-            desc_label = QLabel(model_config["description"])
-            desc_label.setStyleSheet("color: #666; font-size: 10px;")
-            layout.addWidget(desc_label)
-        layout.addStretch(1) # Add stretch after name/description
+        # Details (Language, Speakers, Filesize)
+        details_text = []
+        if model_config.get("language"):
+            details_text.append(f"語言: {model_config['language']}")
+        if model_config.get("speakers"):
+            details_text.append(f"講者數: {model_config['speakers']}")
+        if model_config.get("filesize_mb"):
+            details_text.append(f"大小: {model_config['filesize_mb']}MB")
+        
+        if details_text:
+            details_label = QLabel(" | ".join(details_text))
+            details_label.setStyleSheet(f"color: #888888; font-size: 10px;") # Hardcoded color to bypass AttributeError
+            card_layout.addWidget(details_label, 1, 0, 1, 3)
 
+        # Status Label
         status_label = QLabel()
         status_label.setObjectName("StatusLabel")
-        status_label.setFixedWidth(60) # Fixed width for status to align them
-        status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter) # Align status text right
-        layout.addWidget(status_label)
+        status_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Normal))
+        status_label.setFixedWidth(60) 
+        status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        card_layout.addWidget(status_label, 0, 3) # Placed on the same row as name_label, but right aligned
 
+        # Buttons
         download_button = QPushButton("下載")
         download_button.setObjectName("DownloadButton")
-        download_button.setFixedWidth(80) # Fixed width for consistency
+        download_button.setFixedWidth(60) # Smaller width
         download_button.clicked.connect(lambda: self.app.download_model(model_id))
-        layout.addWidget(download_button)
-        
+        card_layout.addWidget(download_button, 1, 3) # Placed next to status_label
+
         delete_button = QPushButton("刪除")
         delete_button.setObjectName("DeleteButton")
-        delete_button.setFixedWidth(80) # Fixed width for consistency
+        delete_button.setFixedWidth(60) # Smaller width
         delete_button.clicked.connect(lambda: self.app.delete_model(model_id))
-        layout.addWidget(delete_button)
+        card_layout.addWidget(delete_button, 1, 3) # Overlaps download_button, hidden/shown dynamically
+
+        # NEW: Progress Bar
+        progress_bar = QProgressBar()
+        progress_bar.setRange(0, 100)
+        progress_bar.setValue(0)
+        progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        progress_bar.setTextVisible(True) # Show percentage
+        progress_bar.hide() # Initially hidden
+        progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 2px solid #007AFF;
+                border-radius: 5px;
+                background-color: #E0E0E0;
+                text-align: center;
+                color: #333333;
+                height: 20px;
+            }
+            QProgressBar::chunk {
+                background-color: #007AFF;
+                border-radius: 3px;
+            }
+        """)
+        card_layout.addWidget(progress_bar, 1, 3) # Place in the same cell as buttons, will be toggled
 
         self.ui_elements[model_id] = {
             "card": card,
             "status_label": status_label,
             "download_button": download_button,
             "delete_button": delete_button,
+            "progress_bar": progress_bar, # Store reference to progress bar
         }
         
         self.scroll_layout.addWidget(card)
@@ -554,11 +607,38 @@ class ModelManagementWindow(BaseDialog):
             widgets["status_label"].setStyleSheet(f"color: {self.STATUS_GREEN_COLOR};")
             widgets["download_button"].hide()
             widgets["delete_button"].show()
+            widgets["progress_bar"].hide() # Hide progress bar when downloaded
         else:
             widgets["status_label"].setText("未下載")
             widgets["status_label"].setStyleSheet(f"color: {self.STATUS_ORANGE_COLOR};")
             widgets["download_button"].show()
             widgets["delete_button"].hide()
+            widgets["progress_bar"].hide() # Initially hidden until download starts
+
+    def update_download_progress(self, model_id: str, progress: float, status_text: str):
+        if model_id not in self.ui_elements:
+            return
+
+        widgets = self.ui_elements[model_id]
+        
+        # Ensure it's not already downloaded or an invalid progress
+        if widgets["progress_bar"].isHidden() and progress > 0 and progress < 1.0:
+            widgets["download_button"].hide()
+            widgets["delete_button"].hide()
+            widgets["progress_bar"].show()
+
+        if progress >= 0 and progress <= 1.0:
+            widgets["progress_bar"].setValue(int(progress * 100))
+            widgets["progress_bar"].setFormat(f"{status_text} %p%") # Show text and percentage
+            
+            if progress == 1.0: # Download complete
+                widgets["progress_bar"].hide()
+                self._update_model_item_status(model_id) # Re-evaluate status to show "已下載"
+            elif progress == 0 and "失敗" in status_text: # Download failed
+                widgets["progress_bar"].hide()
+                self._update_model_item_status(model_id) # Re-evaluate status to show "未下載" or similar
+                widgets["status_label"].setText("下載失敗")
+                widgets["status_label"].setStyleSheet(f"color: {self.STATUS_RED_COLOR};")
 
 class AddCustomVoiceDialog(QDialog):
     """一個用於新增或編輯自訂語音的小對話框。"""
@@ -820,33 +900,46 @@ class QuickPhrasesWindow(BaseDialog):
         self._build_ui()
 
     def _build_ui(self):
-        # --- 核心修改: 將所有內容放入一個卡片中 ---
-        card, card_layout = self._create_card("快捷語音列表")
+        # --- Header Card with Title and Add Button ---
+        header_card, header_layout = self._create_card()
+        header_layout.setContentsMargins(15, 10, 15, 10)
+        header_layout.setDirection(QHBoxLayout.Direction.LeftToRight) # Ensure horizontal alignment
+        title_label = QLabel("快捷語音列表")
+        title_label.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+        header_layout.addWidget(title_label)
+        header_layout.addStretch(1) # Push button to the right
 
-        # --- 新增按鈕 ---
         add_button = QPushButton("＋ 新增")
         add_button.clicked.connect(self._add_phrase_item)
-        card_layout.addWidget(add_button, 0, Qt.AlignmentFlag.AlignRight)
+        header_layout.addWidget(add_button)
+        self.main_layout.addWidget(header_card)
 
-        # --- 捲動列表 ---
+        # --- Scroll Area for Phrase List ---
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
-        self.scroll_content = QWidget()
-        self.scroll_layout = QVBoxLayout(self.scroll_content)
+        scroll_content = QWidget()
+        self.scroll_layout = QVBoxLayout(scroll_content)
+        self.scroll_layout.setContentsMargins(0, 0, 0, 0)
         self.scroll_layout.setSpacing(10)
-        self.scroll_layout.addStretch(1)
-        scroll_area.setWidget(self.scroll_content)
+        self.scroll_layout.addStretch(1) # Ensure items are pushed to the top
+        
+        self.main_layout.addWidget(scroll_area)
+        scroll_area.setWidget(scroll_content)
 
         self._redraw_phrase_list()
-        card_layout.addWidget(scroll_area, 1) # 讓捲動區佔用剩餘空間
-        self.main_layout.addWidget(card, 1) # 讓卡片佔用主要空間
 
-        # --- 儲存按鈕 ---
+        # --- Bottom Control Bar ---
+        control_frame = QFrame()
+        control_frame.setObjectName("ControlBar")
+        control_layout = QHBoxLayout(control_frame)
+        control_layout.addStretch(1) # Push button to the right
+
         save_button = QPushButton("儲存並關閉")
         save_button.clicked.connect(self._save_and_close)
-        self.main_layout.addWidget(save_button, 0, Qt.AlignmentFlag.AlignRight)
+        control_layout.addWidget(save_button)
+        self.main_layout.addWidget(control_frame)
 
     def _redraw_phrase_list(self):
         # 清空現有項目
@@ -863,27 +956,32 @@ class QuickPhrasesWindow(BaseDialog):
     def _create_phrase_item_widget(self, index, phrase_data):
         phrase_card = QFrame()
         phrase_card.setObjectName("PhraseItemCard")
-        card_layout = QHBoxLayout(self._add_shadow(phrase_card))
-        card_layout.setSpacing(10) # Reduced spacing
-        card_layout.setContentsMargins(15, 10, 15, 10) # Add padding inside the card
+        # Use QGridLayout for better alignment of elements within the phrase card
+        card_layout = QGridLayout(self._add_shadow(phrase_card))
+        card_layout.setContentsMargins(15, 10, 15, 10)
+        card_layout.setHorizontalSpacing(10)
+        card_layout.setVerticalSpacing(5)
 
+        # Input field
         input_field = QLineEdit(phrase_data.get("text", ""))
         input_field.setPlaceholderText(f"快捷語音 {index + 1}...")
         input_field.editingFinished.connect(lambda i=index: self._update_phrase_text(i))
-        card_layout.addWidget(input_field, 1) # Give it stretch
+        card_layout.addWidget(input_field, 0, 0, 1, 2) # Row 0, spanning 2 columns
 
+        # Hotkey button
         hotkey_button = QPushButton(phrase_data.get("hotkey") or "設定快捷鍵")
         hotkey_button.setCheckable(True)
         hotkey_button.setFixedWidth(120) # Consistent width
         hotkey_button.toggled.connect(lambda checked, i=index: self._record_quick_phrase_hotkey(i, checked))
-        card_layout.addWidget(hotkey_button)
+        card_layout.addWidget(hotkey_button, 1, 0) # Row 1, Column 0
 
+        # Delete button
         delete_button = QPushButton("✕")
         delete_button.setObjectName("DeleteButton")
         delete_button.setFixedSize(28, 28) # Consistent small size for delete
         delete_button.clicked.connect(lambda i=index: self._delete_phrase_item(i))
-        card_layout.addWidget(delete_button)
-        # In _redraw_phrase_list, items are inserted before the addStretch, so this should be fine.
+        card_layout.addWidget(delete_button, 1, 1, Qt.AlignmentFlag.AlignRight) # Row 1, Column 1, align right
+
         self.scroll_layout.insertWidget(self.scroll_layout.count() - 1, phrase_card)
         self.ui_elements.append({
             "card": phrase_card,

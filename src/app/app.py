@@ -38,8 +38,9 @@ except ImportError:
 
 from ..utils.deps import (
     APP_VERSION, CABLE_INPUT_HINT,
-    ENGINE_EDGE, ENGINE_PYTTX3, ENGINE_SHERPA_ONNX, ENGINE_CHAT_TTS, DEFAULT_EDGE_VOICE,
-    DependencyManager, ModelDownloader, delete_model as util_delete_model, IS_WINDOWS
+    ENGINE_EDGE, ENGINE_PYTTX3, ENGINE_CHAT_TTS, DEFAULT_EDGE_VOICE,
+    ENGINE_SHERPA_VITS_ZH_AISHELL3, ENGINE_VITS_PIPER_EN_US_GLADOS,
+    DependencyManager, ModelDownloader, delete_model as util_delete_model, IS_WINDOWS, check_model_downloaded # NEW: import check_model_downloaded
 )
 from .audio_engine import AudioEngine
 from ..ui.popups import SettingsWindow, QuickPhrasesWindow, ModelManagementWindow
@@ -47,12 +48,14 @@ from ..ui.main_window import MainWindow
 from .config_manager import ConfigManager
 from ..ui.animation import AnimationManager
 from .updater_manager import UpdateManager
+from .model_manager import PREDEFINED_MODELS # NEW: Import PREDEFINED_MODELS here
+
 
 class AppSignals(QObject):
     """定義應用程式中所有需要跨執行緒通訊的信號。"""
     log_message = pyqtSignal(str, str, str)
     audio_status = pyqtSignal(str, str, str)
-    update_ui_after_load = pyqtSignal()
+    update_ui_after_load = pyqtSignal(str) # NEW: Accepts string for model_id
     prompt_vbcable_setup = pyqtSignal(str)
     check_for_updates = pyqtSignal(bool) # title, message, type, callback_or_event
     show_messagebox_signal = pyqtSignal(str, str, str, object)
@@ -72,14 +75,23 @@ class LocalTTSPlayer(QObject):
         self.CABLE_INPUT_HINT = CABLE_INPUT_HINT
         self.ENGINE_EDGE = ENGINE_EDGE
         self.ENGINE_PYTTX3 = ENGINE_PYTTX3
-        self.ENGINE_SHERPA_ONNX = ENGINE_SHERPA_ONNX
         self.ENGINE_CHAT_TTS = ENGINE_CHAT_TTS
+        self.ENGINE_SHERPA_VITS_ZH_AISHELL3 = ENGINE_SHERPA_VITS_ZH_AISHELL3
+        self.ENGINE_VITS_PIPER_EN_US_GLADOS = ENGINE_VITS_PIPER_EN_US_GLADOS
 
         # 狀態/設定
         # 音訊核心 (必須在 _build_ui 之前建立，以便 UI 取得初始值)
         self.audio = AudioEngine(self.log_message, self.audio_status_queue, startupinfo=self.startupinfo)
         self.updater = UpdateManager(self) # 建立更新管理器
         self.audio.app_controller = self # 讓 audio_engine 可以存取 app
+        self.model_downloader = ModelDownloader(
+            log=self.log_message,
+            status=lambda icon, msg, level="INFO": self.signals.audio_status.emit(level, icon, msg),
+            ask_yes_no_sync=lambda title, msg: self.show_messagebox(title, msg, "yesno", (threading.Event(), []))
+        )
+        self.model_downloader.download_progress_signal.connect(self._on_model_download_progress)
+        self.model_management_window = None # To hold reference to the opened window
+
 
         self.is_running = False
 
@@ -118,11 +130,12 @@ class LocalTTSPlayer(QObject):
 
         self.audio.start() # UI 建立完成後，再啟動音訊背景執行緒
         # 載入設定
-        self.audio.set_engine(self.config.get("engine", ENGINE_SHERPA_ONNX))
+        self.audio.set_engine(self.config.get("engine", ENGINE_PYTTX3)) # Default to pyttsx3
         self.audio.current_voice = self.config.get("voice")
         self.audio.tts_rate   = self.config.get("rate")
         self.audio.tts_volume = self.config.get("volume")
         self.audio.tts_pitch  = self.config.get("pitch", 0)
+        self.log_message(f"DEBUG: LocalTTSPlayer.__init__: Loaded global TTS Rate: {self.audio.tts_rate}, Volume: {self.audio.tts_volume}, Pitch: {self.audio.tts_pitch}", "DEBUG")
         self.audio.set_listen_config(self.config.get("enable_listen_to_self"), self.config.get("listen_device_name"), self.config.get("listen_volume"))
 
         self._update_hotkey_display(self.config.get("hotkey"))
@@ -150,6 +163,15 @@ class LocalTTSPlayer(QObject):
 
         # 根據設定初始化日誌區域可見性
         QTimer.singleShot(10, lambda: self.toggle_log_area(initial_load=True))
+
+    def get_sherpa_onnx_engines(self):
+        downloaded_sherpa_engines = []
+        for model_id, model_config in PREDEFINED_MODELS.items():
+            if "engine" in model_config and model_config["engine"] == model_id: # Assuming engine == model_id for Sherpa-ONNX models
+                if check_model_downloaded(model_id):
+                    downloaded_sherpa_engines.append(model_id)
+        return downloaded_sherpa_engines
+
 
     def _connect_signals(self):
         """連接所有 PyQt 信號到對應的槽函數。"""
@@ -181,7 +203,7 @@ class LocalTTSPlayer(QObject):
     def _log_message_slot(self, formatted_msg, level, mode):
         """在主執行緒中更新日誌 UI 的槽函數。"""
         # DEBUG 訊息現在會顯示，以協助診斷問題
-        # if level.upper() == 'DEBUG': return 
+        if level.upper() == 'DEBUG': return 
 
         log_widget = self.main_window.log_text
         cursor = log_widget.textCursor()
@@ -256,22 +278,22 @@ class LocalTTSPlayer(QObject):
                 return
 
             self.log_message("檢查 TTS 模型...", "DEBUG")
-            model_downloader = ModelDownloader(log=callbacks["log"], status=callbacks["status"], ask_yes_no_sync=callbacks["ask_yes_no_sync"])
-            model_downloader.ensure_model("sherpa-vits-zh-aishell3")
+            # model_downloader = ModelDownloader(log=callbacks["log"], status=callbacks["status"], ask_yes_no_sync=callbacks["ask_yes_no_sync"])
+            # model_downloader.ensure_model("sherpa-vits-zh-aishell3") # Removed automatic model download at startup
 
             import asyncio
             self.audio.init_pyttsx3()
             asyncio.run(self.audio.load_edge_voices())
-            sherpa_loaded = self.audio.init_sherpa_onnx()
+            sherpa_loaded = self.audio._init_sherpa_onnx_runtime()
 
             # Fallback logic
-            if self.config.get("engine") == ENGINE_SHERPA_ONNX and not sherpa_loaded:
+            if self.config.get("engine") in self.get_sherpa_onnx_engines() and not sherpa_loaded:
                 self.log_message("預設引擎 Sherpa-ONNX 模型載入失敗，自動切換至備援引擎 pyttsx3。", "WARN")
                 self.config.set("engine", ENGINE_PYTTX3)
                 self.audio.set_engine(ENGINE_PYTTX3)
             
             self.audio.load_devices()
-            self.signals.update_ui_after_load.emit()
+            self.signals.update_ui_after_load.emit("") # Provide empty string as argument
             self.log_message("依賴與設備載入完成。", "DEBUG")
 
             self.main_window.start_button.setEnabled(True)
@@ -300,11 +322,14 @@ class LocalTTSPlayer(QObject):
             "安裝後，請重新啟動本應用程式。",
             msg_type='yesno', callback=on_user_choice)
 
-    def _update_ui_after_load(self):
+    def _update_ui_after_load(self, new_engine_id=""):
         self._ui_loading = True
 
-        current_engine = self.config.get("engine", ENGINE_SHERPA_ONNX)
-        self.main_window.engine_combo.setCurrentText(current_engine)
+        current_engine = new_engine_id if new_engine_id else self.config.get("engine", ENGINE_PYTTX3)
+        self.log_message(f"DEBUG: _update_ui_after_load: current_engine from config or new download: {current_engine}", "DEBUG")
+        # Ensure engine_combo exists before trying to set its text
+        if hasattr(self.main_window, 'engine_combo'):
+            self.main_window.engine_combo.setCurrentText(current_engine)
         
         self.all_voices_map = {}
         if current_engine == ENGINE_EDGE:
@@ -312,8 +337,9 @@ class LocalTTSPlayer(QObject):
             for v in self.config.get("custom_voices", []): self.all_voices_map[v["name"]] = v
         elif current_engine == ENGINE_PYTTX3:
             for v in self.audio.get_voice_names(): self.all_voices_map[v] = {"name": v}
-        elif current_engine == ENGINE_SHERPA_ONNX:
-            for v in self.audio.get_voice_names(): self.all_voices_map[v] = {"name": v}
+        elif current_engine in self.get_sherpa_onnx_engines(): # Updated condition for Sherpa-ONNX models
+            # For Sherpa-ONNX engines, the engine itself is the "voice"
+            self.all_voices_map[current_engine] = {"name": current_engine}
 
         # Handle backward compatibility for visible_voices
         visible_voices_setting = self.config.get("visible_voices", {})
@@ -326,9 +352,28 @@ class LocalTTSPlayer(QObject):
             
         visible_voices = [name for name in visible_voices_config if name in self.all_voices_map]
         
+        # If no visible voices are configured, but there are voices available, select the first one.
+        # For Sherpa-ONNX engines, we might just add the engine ID itself as the "voice".
         if not visible_voices and self.all_voices_map:
-            default_voice_name = list(self.all_voices_map.keys())[0]
-            visible_voices.append(default_voice_name)
+            # If current engine is a Sherpa-ONNX model, ensure it's in the visible voices.
+            if current_engine in self.get_sherpa_onnx_engines():
+                visible_voices.append(current_engine)
+            else:
+                default_voice_name = list(self.all_voices_map.keys())[0]
+                visible_voices.append(default_voice_name)
+
+        # Repopulate engine combo box
+        engine_list = [
+            self.ENGINE_EDGE,
+            self.ENGINE_PYTTX3,
+            self.ENGINE_CHAT_TTS
+        ] + self.get_sherpa_onnx_engines()
+        self.log_message(f"DEBUG: _update_ui_after_load: Repopulating engine_combo with: {engine_list}", "DEBUG")
+        # Ensure engine_combo exists before trying to clear/add items
+        if hasattr(self.main_window, 'engine_combo'):
+            self.main_window.engine_combo.clear()
+            self.main_window.engine_combo.addItems(engine_list)
+            self.log_message(f"DEBUG: _update_ui_after_load: engine_combo current text after repopulating: {self.main_window.engine_combo.currentText()}", "DEBUG")
 
         self.main_window.voice_combo.clear()
         self.main_window.voice_combo.addItems(visible_voices)
@@ -339,7 +384,10 @@ class LocalTTSPlayer(QObject):
         elif visible_voices:
             self.main_window.voice_combo.setCurrentText(visible_voices[0])
 
-        self.main_window.voice_combo.setEnabled(True)
+        # Enable/disable voice combo based on engine type
+        self.main_window.voice_combo.setEnabled(current_engine not in self.get_sherpa_onnx_engines())
+
+        self.log_message(f"DEBUG: _update_ui_after_load: Audio TTS Rate: {self.audio.tts_rate}, Audio TTS Volume: {self.audio.tts_volume}", "DEBUG")
         
         devnames = self.audio.get_output_device_names()
         self.main_window.local_device_combo.clear()
@@ -689,22 +737,21 @@ class LocalTTSPlayer(QObject):
     def _open_model_management_window(self):
         if self.main_window.stacked_layout.currentIndex() == 1:
             return
-        model_widget = ModelManagementWindow(self.main_window, self)
-        self.main_window.show_overlay(model_widget)
+        self.model_management_window = ModelManagementWindow(self.main_window, self)
+        self.main_window.show_overlay(self.model_management_window)
+
+    def _on_model_download_progress(self, model_id: str, progress: float, status_text: str):
+        if self.model_management_window:
+            self.model_management_window.update_download_progress(model_id, progress, status_text)
 
     def download_model(self, model_id):
         thread = threading.Thread(target=self._download_model_thread, args=(model_id,), daemon=True)
         thread.start()
 
     def _download_model_thread(self, model_id):
-        callbacks = {
-            "log": lambda msg, level="INFO": self.log_message(msg, level),
-            "status": lambda icon, msg, level="INFO": self.signals.audio_status.emit(level, icon, msg),
-            "ask_yes_no_sync": lambda title, msg: self.show_messagebox(title, msg, "yesno", (threading.Event(), [])),
-        }
-        downloader = ModelDownloader(**callbacks)
-        if downloader.ensure_model(model_id):
+        if self.model_downloader.ensure_model(model_id):
             self.log_message(f"模型 {model_id} 已成功準備就緒。", "INFO")
+            self.signals.update_ui_after_load.emit(model_id) # NEW: Signal with model_id to refresh UI
         else:
             self.log_message(f"模型 {model_id} 處理失敗。", "WARN")
         
@@ -747,32 +794,49 @@ class LocalTTSPlayer(QObject):
         self.log_message(f"切換引擎: {self.audio.current_engine}")
 
         # Re-init engine if necessary and handle UI changes
-        if val == ENGINE_SHERPA_ONNX:
-            if not self.audio.init_sherpa_onnx():
-                self.show_messagebox("錯誤", "Sherpa-ONNX 模型檔案不完整或載入失敗。\n請檢查 tts_models 資料夾。\n將切換回 pyttsx3。", "error")
+        if val in self.get_sherpa_onnx_engines(): # Updated condition for Sherpa-ONNX models
+            if not self.audio._init_sherpa_onnx_runtime():
+                self.show_messagebox("錯誤", "Sherpa-ONNX 引擎初始化失敗。\n請檢查 'sherpa-onnx' 模組是否正確安裝。", "error")
                 self.main_window.engine_combo.setCurrentText(ENGINE_PYTTX3) # This will re-trigger _on_engine_change
                 return
             self.main_window.pitch_slider.setEnabled(False)
-            self.main_window.speed_slider.setRange(5, 20) # 0.5 to 2.0
-            self.main_window.speed_slider.setValue(int(self.audio.tts_rate * 10))
+            self.main_window.speed_slider.setRange(0, 20) # 0.0 to 2.0 (0-20 mapped to slider)
+            self.main_window.speed_slider.setValue(int(self.audio.tts_rate * 10)) # Apply loaded rate
+            self.main_window.volume_slider.setValue(int(self.audio.tts_volume * 100)) # Apply loaded volume
+            self.log_message(f"DEBUG: _on_engine_change (Sherpa-ONNX): Applied Rate={self.audio.tts_rate}, Volume={self.audio.tts_volume} to sliders", "DEBUG")
         elif val == ENGINE_EDGE:
             self.main_window.pitch_slider.setEnabled(True)
             self.main_window.speed_slider.setRange(100, 250)
             self.main_window.speed_slider.setValue(self.audio.tts_rate)
+            self.main_window.volume_slider.setValue(int(self.audio.tts_volume * 100))
+            self.log_message(f"DEBUG: _on_engine_change (Edge): Applied Rate={self.audio.tts_rate}, Volume={self.audio.tts_volume} to sliders", "DEBUG")
         elif val == ENGINE_PYTTX3:
             self.main_window.pitch_slider.setEnabled(False)
             self.main_window.speed_slider.setRange(100, 250)
             self.main_window.speed_slider.setValue(self.audio.tts_rate)
+            self.main_window.volume_slider.setValue(int(self.audio.tts_volume * 100))
+            self.log_message(f"DEBUG: _on_engine_change (pyttsx3): Applied Rate={self.audio.tts_rate}, Volume={self.audio.tts_volume} to sliders", "DEBUG")
         elif val == ENGINE_CHAT_TTS:
             self.show_messagebox("提示", "ChatTTS 是一個實驗性選項，資源需求高且可能不穩定。\n目前尚未在此版本中完全實作。", "warning")
-            self.main_window.engine_combo.setCurrentText(ENGINE_SHERPA_ONNX) # Fallback
+            # Fallback to the first Sherpa-ONNX engine if possible, otherwise pyttsx3
+            if self.get_sherpa_onnx_engines():
+                self.main_window.engine_combo.setCurrentText(self.get_sherpa_onnx_engines()[0])
+            else:
+                self.main_window.engine_combo.setCurrentText(ENGINE_PYTTX3)
             return
 
         # Update voice list
         combo = self.main_window.voice_combo
         combo.blockSignals(True)
         try:
-            values = self.audio.get_voice_names()
+            # If it's a Sherpa-ONNX engine, the voice combo should be disabled and show the engine itself
+            if val in self.get_sherpa_onnx_engines():
+                values = [val] # The engine itself is the "voice"
+                combo.setEnabled(False)
+            else:
+                values = self.audio.get_voice_names()
+                combo.setEnabled(True)
+
             combo.clear()
             combo.addItems(values)
             
@@ -791,8 +855,16 @@ class LocalTTSPlayer(QObject):
     def on_voice_change(self, choice):
         if not choice or self._ui_loading: return
         
-        if self.audio.current_engine == ENGINE_SHERPA_ONNX:
-            self.audio.set_current_voice(choice)
+        # If the current engine is one of the Sherpa-ONNX engines, 'choice' is the model ID
+        if self.audio.current_engine in self.get_sherpa_onnx_engines():
+            model_id = self.audio.current_engine # The engine name is the model ID
+            if self.audio.sherpa_model_id != model_id:
+                self.log_message(f"嘗試載入 Sherpa-ONNX 模型: {model_id}", "INFO")
+                if not self.audio._load_sherpa_onnx_voice(model_id):
+                    self.show_messagebox("錯誤", f"載入 Sherpa-ONNX 模型 '{model_id}' 失敗。\n請檢查該模型檔案是否完整。", "error")
+                    self.main_window.engine_combo.setCurrentText(ENGINE_PYTTX3) 
+                    return
+            self.audio.set_current_voice(model_id) # Set voice after successful load
         elif self.audio.current_engine == ENGINE_PYTTX3:
             self.audio.set_pyttsx3_voice_by_name(choice)
         else: # Edge
@@ -810,22 +882,39 @@ class LocalTTSPlayer(QObject):
     def update_tts_settings(self, _=None):
         if self._ui_loading: return
 
-        if self.audio.current_engine == ENGINE_SHERPA_ONNX:
-            rate = self.main_window.speed_slider.value() / 10.0
-            self.audio.set_rate_volume(rate, round(self.main_window.volume_slider.value() / 100.0, 2))
+        self.log_message(f"DEBUG: update_tts_settings: UI Loading state: {self._ui_loading}", "DEBUG")
+        current_speed_slider_value = self.main_window.speed_slider.value()
+        current_volume_slider_value = self.main_window.volume_slider.value()
+        self.log_message(f"DEBUG: update_tts_settings: Slider values - Speed: {current_speed_slider_value}, Volume: {current_volume_slider_value}", "DEBUG")
+
+
+        if self.audio.current_engine in self.get_sherpa_onnx_engines():
+            rate = current_speed_slider_value / 10.0
+            volume = round(current_volume_slider_value / 100.0, 2)
+            self.audio.set_rate_volume(rate, volume)
             self.main_window.speed_value_label.setText(f"{rate:.1f}")
-        else:
-            rate = self.main_window.speed_slider.value()
-            self.audio.set_rate_volume(rate, round(self.main_window.volume_slider.value() / 100.0, 2))
-            self.main_window.speed_value_label.setText(f"{rate}")
+            # Pitch is not applicable for Sherpa-ONNX, so reflect that in UI
+            self.main_window.pitch_value_label.setText("N/A")
+            self.audio.tts_pitch = 0 # Ensure pitch is reset or set to a neutral value
             
-        self.audio.tts_pitch = self.main_window.pitch_slider.value()
+            # NEW: Save per-model rate and volume
+            self.config.set_model_setting(self.audio.current_engine, "rate", rate)
+            self.config.set_model_setting(self.audio.current_engine, "volume", volume)
+            self.log_message(f"DEBUG: update_tts_settings (Sherpa-ONNX): Saved Rate={rate}, Volume={volume} for model '{self.audio.current_engine}'", "DEBUG")
+        else:
+            rate = current_speed_slider_value
+            volume = round(current_volume_slider_value / 100.0, 2)
+            self.audio.set_rate_volume(rate, volume)
+            self.main_window.speed_value_label.setText(f"{rate}")
+            self.audio.tts_pitch = self.main_window.pitch_slider.value()
+            self.main_window.pitch_value_label.setText(f"{self.audio.tts_pitch}")
+            
+            self.config.set("rate", self.audio.tts_rate)
+            self.config.set("volume", self.audio.tts_volume)
+            self.config.set("pitch", self.audio.tts_pitch)
+            self.log_message(f"DEBUG: update_tts_settings (Other Engine): Saved Rate={self.audio.tts_rate}, Volume={self.audio.tts_volume}, Pitch={self.audio.tts_pitch} globally", "DEBUG")
+
         self.main_window.volume_value_label.setText(f"{self.audio.tts_volume:.2f}")
-        self.main_window.pitch_value_label.setText(f"{self.audio.tts_pitch}")
-        
-        self.config.set("rate", self.audio.tts_rate)
-        self.config.set("volume", self.audio.tts_volume)
-        self.config.set("pitch", self.audio.tts_pitch)
 
     def on_closing(self):
         if self.hotkey_listener:
@@ -833,6 +922,7 @@ class LocalTTSPlayer(QObject):
             except Exception: pass
         
         self.audio.stop()
+        self.config.save() # NEW: Save config on exit
         QApplication.instance().quit()
 
     # --- Stubs for methods not fully shown ---

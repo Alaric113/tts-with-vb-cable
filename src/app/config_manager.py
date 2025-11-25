@@ -36,6 +36,7 @@ class ConfigManager:
         "show_log_area": True,
         "custom_voices": [], # 新增: 儲存自訂語音
         "visible_voices": [], # 新增: 儲存要在主視窗顯示的語音
+        "model_settings": {}, # NEW: 儲存模型專屬的設定，例如語速和音量
     }
 
     def __init__(self, log_func):
@@ -50,6 +51,22 @@ class ConfigManager:
     def set(self, key, value):
         """設定一個值並自動儲存到檔案。"""
         self.config[key] = value
+        self.save()
+
+    def get_model_setting(self, model_id, setting_key, default_value=None):
+        """取得特定模型的設定值。"""
+        value = self.config.get("model_settings", {}).get(model_id, {}).get(setting_key, default_value)
+        self.log(f"DEBUG: ConfigManager.get_model_setting: model_id='{model_id}', key='{setting_key}', value='{value}', default='{default_value}'", "DEBUG")
+        return value
+
+    def set_model_setting(self, model_id, setting_key, value):
+        """設定特定模型的設定值並自動儲存到檔案。"""
+        if "model_settings" not in self.config:
+            self.config["model_settings"] = {}
+        if model_id not in self.config["model_settings"]:
+            self.config["model_settings"][model_id] = {}
+        self.config["model_settings"][model_id][setting_key] = value
+        self.log(f"DEBUG: ConfigManager.set_model_setting: model_id='{model_id}', key='{setting_key}', value='{value}'", "DEBUG")
         self.save()
 
     def load(self):

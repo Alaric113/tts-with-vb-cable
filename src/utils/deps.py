@@ -54,8 +54,13 @@ VB_CABLE_DOWNLOAD_URL = "https://download.vb-audio.com/Download_CABLE/VBCABLE_Dr
 DEFAULT_EDGE_VOICE = "zh-CN-XiaoxiaoNeural"
 ENGINE_EDGE   = "edge-tts"
 ENGINE_PYTTX3 = "pyttsx3"
-ENGINE_SHERPA_ONNX = "sherpa-onnx"
 ENGINE_CHAT_TTS = "ChatTTS (experimental)"
+ENGINE_SHERPA_VITS_ZH_AISHELL3 = "sherpa-vits-zh-aishell3"
+ENGINE_VITS_PIPER_EN_US_GLADOS = "vits-piper-en_US-glados"
+
+# Set a Sherpa-ONNX model as the default engine if you want
+# DEFAULT_ENGINE = ENGINE_VITS_PIPER_EN_US_GLADOS 
+
 
 FFMPEG_DIR = os.path.join(BASE_DIR, "ffmpeg")
 FFMPEG_BIN_DIR = os.path.join(FFMPEG_DIR, "bin")
@@ -298,6 +303,14 @@ class DependencyManager:
         self.show_error = show_error
         self.startupinfo = startupinfo
 
+        # NEW: Check for non-ASCII characters in TTS_MODELS_DIR
+        try:
+            TTS_MODELS_DIR.encode('ascii')
+        except UnicodeEncodeError:
+            self.log(f"警告：模型存放路徑 '{TTS_MODELS_DIR}' 包含非 ASCII 字元。這可能導致 Sherpa-ONNX 模型載入失敗。", "WARN")
+            self.log("建議將應用程式移動到路徑不含中文或其他非英文字元的資料夾。", "WARN")
+
+
     # ---- ffmpeg ----
     def ensure_ffmpeg(self) -> bool:
         self.status("[|]", "檢查系統 ffmpeg/ffprobe…")
@@ -428,11 +441,24 @@ class DependencyManager:
 
         self.ask_yes_no_async("VB-CABLE 安裝助手", "未偵測到 VB-CABLE 驅動，且找不到安裝程式。\n\n是否要從官方網站自動下載 VB-CABLE 安裝包？", on_user_choice)
 
-class ModelDownloader:
+from PyQt6.QtCore import QObject, pyqtSignal # NEW: Import QObject and pyqtSignal
+# ... (rest of imports)
+
+# ... (other code)
+
+class ModelDownloader(QObject): # Inherit from QObject
+    download_progress_signal = pyqtSignal(str, float, str) # model_id, progress, status_text
+
     def __init__(self, log, status, ask_yes_no_sync):
+        super().__init__() # Call QObject's constructor
         self.log = log
         self.status = status
         self.ask_yes_no_sync = ask_yes_no_sync
+
+    def _progress_callback(self, model_id, progress, text):
+        self.download_progress_signal.emit(model_id, progress, text)
+        self.status("[↓]", text, "INFO") # Also update general status
+
 
     def ensure_model(self, model_id: str) -> bool:
         if model_id not in PREDEFINED_MODELS:
@@ -447,6 +473,11 @@ class ModelDownloader:
             self.log(f"模型 '{model_id}' 已存在。", "INFO")
             return True
 
+        # MODIFICATION: Log which files are missing
+        missing_files = [str(f) for f in required_files if not f.exists()]
+        if missing_files:
+            self.log(f"模型 '{model_id}' 缺少以下檔案：{', '.join(missing_files)}", "WARNING")
+        
         self.status("[!]", f"TTS 模型 '{model_id}' 不完整或不存在。", "WARN")
         do_download = self.ask_yes_no_sync("模型下載", f"Sherpa-ONNX 引擎需要下載 TTS 模型 '{model_id}'。\n\n是否要自動下載模型 (約 80-150MB)？")
 
@@ -463,31 +494,37 @@ class ModelDownloader:
                 archive_path = Path(temp_download_dir) / f"{model_id}{file_ext}"
 
                 self.status("[↓]", f"準備從網路下載模型 '{model_id}'…", "INFO")
+                download_with_with_progress_cb = lambda p, t: self._progress_callback(model_id, p * 0.8, t) # Scale for download phase
                 download_with_progress(
                     download_url, str(archive_path),
-                    progress_cb=lambda p, t: self.status("[↓]", t, "INFO")
+                    progress_cb=download_with_with_progress_cb
                 )
                 
                 self.status("[unpacking]", "模型下載完成，準備解壓…", "INFO")
+                extract_with_progress_cb = lambda p, t: self._progress_callback(model_id, 0.8 + p * 0.2, t) # Scale for extraction phase
                 
                 if download_url.endswith(".tar.bz2"):
                     extract_tar_bz2(
                         str(archive_path), str(model_dir),
-                        progress_cb=lambda p, t: self.status("[unpacking]", t, "INFO"),
+                        progress_cb=extract_with_progress_cb,
                         log_cb=self.log
                     )
                 else:
                     self.log(f"不支援的壓縮格式: {download_url}", "ERROR")
+                    self.download_progress_signal.emit(model_id, 0, "下載失敗") # Emit failure
                     return False
 
             if all(f.exists() for f in required_files):
                 self.log(f"模型 '{model_id}' 已成功下載並解壓。", "INFO")
+                self.download_progress_signal.emit(model_id, 1.0, "下載完成") # Emit completion
                 return True
             else:
                 self.log(f"解壓後模型檔案仍不完整，請手動檢查。", "ERROR")
                 for f in required_files:
                     self.log(f"檢查檔案: {f}, 是否存在: {f.exists()}", "ERROR")
+                self.download_progress_signal.emit(model_id, 0, "解壓失敗") # Emit failure
                 return False
         except Exception as e:
             self.log(f"下載或解壓模型 '{model_id}' 失敗: {e}", "ERROR")
+            self.download_progress_signal.emit(model_id, 0, "下載失敗") # Emit failure
             return False

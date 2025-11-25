@@ -13,6 +13,7 @@ import os
 import asyncio
 import threading
 import tempfile
+import shutil # NEW import for file operations
 import numpy as np
 import sounddevice as sd
 from scipy.signal import resample # NEW import
@@ -30,23 +31,23 @@ sherpa_onnx = None
 soundfile = None
 
 from ..utils.deps import (DEFAULT_EDGE_VOICE, ENGINE_EDGE, ENGINE_PYTTX3,
-                          ENGINE_SHERPA_ONNX, CABLE_INPUT_HINT, TTS_MODELS_DIR)
+                          CABLE_INPUT_HINT, TTS_MODELS_DIR)
 from .model_manager import PREDEFINED_MODELS
 
 class AudioEngine:
-    def __init__(self, log_callback, status_queue, startupinfo=None):
-        self.app_controller = None
-        self.log = log_callback
-        self.status_queue = status_queue
+    def __init__(self, log_cb, audio_status_queue, startupinfo=None):
+        self.log = log_cb
+        self.audio_status_queue = audio_status_queue
         self.startupinfo = startupinfo
+        self.app_controller = None # 回傳給 app 的參照，用於存取其他 app 屬性
 
-        self.current_engine = ENGINE_SHERPA_ONNX # 預設改為 Sherpa-ONNX
+        self.current_engine = ENGINE_PYTTX3 # 預設改為 pyttsx3 (原 Sherpa-ONNX 已拆分)
         self.current_voice = "default"
         self.pyttsx3_voice_id = None
         self.sherpa_speaker_id = 0
         self.sherpa_speakers = []
 
-        self.tts_rate = 0.5 # For Sherpa, 1.0 is default speed
+        self.tts_rate = 1.0 # For Sherpa, 1.0 is default speed (changed from 0.5)
         self.tts_volume = 1.0
         self.tts_pitch = 0
 
@@ -59,6 +60,7 @@ class AudioEngine:
         self._edge_voices = []
         self._sherpa_tts = None
         self.sherpa_model_id = None
+        self._temp_model_dir = None # To hold the TemporaryDirectory object for Sherpa-ONNX models
 
         self._local_output_devices = {}
         self._listen_devices = {}
@@ -138,8 +140,15 @@ class AudioEngine:
         except Exception as e:
             self.log(f"Edge TTS 載入失敗: {e}", "WARN")
 
-    def init_sherpa_onnx(self, model_id="sherpa-vits-zh-aishell3"):
+    def _init_sherpa_onnx_runtime(self):
+        # This method only ensures sherpa_onnx can be imported.
+        # Actual model loading happens in _load_sherpa_onnx_voice.
         if not self._lazy_import() or sherpa_onnx is None:
+            return False
+        return True
+
+    def _load_sherpa_onnx_voice(self, model_id: str) -> bool:
+        if not self._init_sherpa_onnx_runtime(): # Ensure runtime is initialized
             return False
 
         if model_id not in PREDEFINED_MODELS:
@@ -147,23 +156,73 @@ class AudioEngine:
             return False
 
         model_config = PREDEFINED_MODELS[model_id]
-        model_dir = Path(TTS_MODELS_DIR) / model_id
+        original_model_dir = Path(TTS_MODELS_DIR) / model_id
         
-        # 檢查所有模型檔案是否存在
-        required_files = [model_dir / fname for fname in model_config["file_names"]]
-        if not all(f.exists() for f in required_files):
-            self.log(f"模型 '{model_id}' 檔案不完整，Sherpa-ONNX 未初始化。", "WARNING")
-            self._sherpa_tts = None
-            self.sherpa_model_id = None
-            return False
+        # 檢查所有模型檔案是否存在 (原始位置)
+        required_files_original = [original_model_dir / fname for fname in model_config["file_names"]]
+        for f in required_files_original:
+            if not f.exists():
+                self.log(f"模型 '{model_id}' 缺少以下檔案：{str(f)}", "WARNING")
+                self.log(f"模型 '{model_id}' 檔案不完整。", "WARNING")
+                self._sherpa_tts = None
+                self.sherpa_model_id = None
+                return False
+
+        # --- NEW: Create a temporary directory with ASCII-safe path and copy model files ---
+        # Clean up previous temporary directory if it exists
+        if self._temp_model_dir is not None:
+            self._temp_model_dir.cleanup()
+            self._temp_model_dir = None
 
         try:
-            vits_model = str(model_dir / "vits-aishell3.onnx") # 假設 vits 模型檔名
-            lexicon = str(model_dir / "lexicon.txt")
+            self._temp_model_dir = tempfile.TemporaryDirectory(prefix=f"sherpa_onnx_{model_id}_")
+            temp_model_path = Path(self._temp_model_dir.name)
+            self.log(f"DEBUG: 建立臨時模型目錄: {temp_model_path}", "DEBUG")
+
+            # Copy all required files/directories to the temporary location
+            for fname in model_config["file_names"]:
+                src_path = original_model_dir / fname
+                dst_path = temp_model_path / fname
+                if src_path.is_dir():
+                    shutil.copytree(src_path, dst_path)
+                else:
+                    shutil.copy2(src_path, dst_path)
+                self.log(f"DEBUG: 複製 '{src_path}' 到 '{dst_path}'", "DEBUG")
+
+            # Update paths to point to the temporary directory
+            model_dir = temp_model_path
+
+            # Dynamically find the .onnx file from model_config["file_names"]
+            onnx_filename = ""
+            for fname in model_config["file_names"]:
+                if fname.endswith(".onnx"):
+                    onnx_filename = fname
+                    break
+            if not onnx_filename:
+                self.log(f"模型 '{model_id}' 的配置中未找到 .onnx 檔案。", "ERROR")
+                self._sherpa_tts = None
+                self.sherpa_model_id = None
+                return False
+            vits_model = str(model_dir / onnx_filename)
+
+            glados_data_dir = "" # Initialize data_dir for glados model
+            # Special handling for glados model, which requires data_dir
+            if model_id == "vits-piper-en_US-glados":
+                glados_data_dir = str(model_dir / "espeak-ng-data")
+
+            lexicon_file = model_dir / "lexicon.txt"
+            lexicon = str(lexicon_file) if lexicon_file.exists() else "" # Make lexicon optional
             tokens = str(model_dir / "tokens.txt")
             
             # 找到所有 rule FST 檔案
-            rules_files = [str(f) for f in model_dir.glob("*.fsts")]
+            rules_files = [str(f) for f in model_dir.glob("*.fst")]
+
+            self.log(f"DEBUG: Sherpa-ONNX 載入參數 - model_id: {model_id}", "DEBUG")
+            self.log(f"DEBUG: vits_model (temp): {vits_model}", "DEBUG")
+            self.log(f"DEBUG: lexicon (temp): {lexicon}", "DEBUG")
+            self.log(f"DEBUG: tokens (temp): {tokens}", "DEBUG")
+            self.log(f"DEBUG: glados_data_dir (temp): {glados_data_dir}", "DEBUG")
+            self.log(f"DEBUG: rules_files (temp): {rules_files}", "DEBUG")
 
             tts_config = sherpa_onnx.OfflineTtsConfig(
                 model=sherpa_onnx.OfflineTtsModelConfig(
@@ -171,22 +230,35 @@ class AudioEngine:
                         model=vits_model,
                         lexicon=lexicon,
                         tokens=tokens,
+                        data_dir=glados_data_dir # Pass data_dir for glados
                     ),
                     num_threads=2,
                     provider="cpu",
                 ),
                 rule_fsts=','.join(rules_files) if rules_files else ""
             )
-            
+            self.log(f"DEBUG: tts_config constructed. Attempting to instantiate sherpa_onnx.OfflineTts...", "DEBUG")
             self._sherpa_tts = sherpa_onnx.OfflineTts(tts_config)
+            self.log(f"DEBUG: sherpa_onnx.OfflineTts instantiated successfully.", "DEBUG")
             self.sherpa_speakers = [f"Speaker {i}" for i in range(self._sherpa_tts.num_speakers)]
             self.sherpa_model_id = model_id
-            self.log(f"Sherpa-ONNX 引擎已成功載入模型 '{model_id}'。", "DEBUG")
+            
+            # Load model-specific rate and volume from config, fallback to default_rate/volume from model_config
+            # Note: app_controller is LocalTTSPlayer, which has the config manager
+            self.tts_rate = self.app_controller.config.get_model_setting(model_id, "rate", model_config.get("default_rate", 1.0))
+            self.tts_volume = self.app_controller.config.get_model_setting(model_id, "volume", model_config.get("default_volume", 1.0))
+            self.log(f"DEBUG: _load_sherpa_onnx_voice: Loaded model-specific TTS Rate: {self.tts_rate}, Volume: {self.tts_volume}", "DEBUG")
+
+            self.log(f"DEBUG: Sherpa-ONNX 引擎已成功載入模型 '{model_id}'。設定速率: {self.tts_rate}, 音量: {self.tts_volume}", "DEBUG")
             return True
         except Exception as e:
             self.log(f"載入 Sherpa-ONNX 模型失敗: {e}", "ERROR")
             self._sherpa_tts = None
             self.sherpa_model_id = None
+            # Ensure cleanup if an error occurs during loading after copying
+            if self._temp_model_dir is not None:
+                self._temp_model_dir.cleanup()
+                self._temp_model_dir = None
             return False
 
     def query_devices(self):
@@ -226,7 +298,7 @@ class AudioEngine:
 
     def set_current_voice(self, voice_name: str):
         self.current_voice = voice_name or "default"
-        if self.current_engine == ENGINE_SHERPA_ONNX and self.sherpa_speakers:
+        if self.app_controller and self.current_engine in self.app_controller.get_sherpa_onnx_engines() and self.sherpa_speakers:
             try:
                 # voice_name is like "Speaker 1"
                 self.sherpa_speaker_id = int(voice_name.split(" ")[-1])
@@ -241,11 +313,13 @@ class AudioEngine:
                 break
 
     def set_rate_volume(self, rate, volume):
-        if self.current_engine == ENGINE_SHERPA_ONNX:
+        self.log(f"DEBUG: set_rate_volume: Received rate={rate}, volume={volume}", "DEBUG")
+        if self.app_controller and self.current_engine in self.app_controller.get_sherpa_onnx_engines():
             self.tts_rate = float(rate) # Speed for sherpa
         else:
             self.tts_rate = int(rate) # Rate for edge/pyttsx3
         self.tts_volume = float(volume)
+        self.log(f"DEBUG: set_rate_volume: Set self.tts_rate={self.tts_rate}, self.tts_volume={self.tts_volume}", "DEBUG")
 
     def apply_listen_config(self, config: dict):
         self.enable_listen_to_self = config.get("enable_listen_to_self", False)
@@ -286,7 +360,7 @@ class AudioEngine:
         asyncio.set_event_loop(loop)
 
         try:
-            if self.current_engine == ENGINE_SHERPA_ONNX:
+            if self.app_controller and self.current_engine in self.app_controller.get_sherpa_onnx_engines():
                 samples, sample_rate = self._synth_sherpa_onnx(text)
             elif self.current_engine == ENGINE_EDGE:
                 samples, sample_rate = loop.run_until_complete(self._synth_edge_to_memory(text))
@@ -309,8 +383,8 @@ class AudioEngine:
             return [DEFAULT_EDGE_VOICE] + [v["ShortName"] for v in self._edge_voices]
         elif self.current_engine == ENGINE_PYTTX3:
             return [v.name for v in self._pyttsx3_voices] if self._pyttsx3_voices else ["default"]
-        elif self.current_engine == ENGINE_SHERPA_ONNX:
-            return self.sherpa_speakers if self.sherpa_speakers else ["default"]
+        elif self.current_engine in self.app_controller.get_sherpa_onnx_engines(): # Updated condition
+            return [self.current_engine] # The engine itself is the "voice"
         return ["default"]
 
     def get_listen_device_names(self):
@@ -328,6 +402,7 @@ class AudioEngine:
             self.log("Sherpa-ONNX 引擎未初始化，無法合成。", "ERROR")
             return None, None
         try:
+            self.log(f"DEBUG: _synth_sherpa_onnx: Generating speech with speed={self.tts_rate}, speaker_id={self.sherpa_speaker_id}", "DEBUG")
             audio = self._sherpa_tts.generate(text, sid=self.sherpa_speaker_id, speed=self.tts_rate)
             samples = np.array(audio.samples, dtype=np.float32)
             return samples, audio.sample_rate
@@ -420,7 +495,7 @@ class AudioEngine:
         is_preview = False # Simplified for now
 
         self.log(f"Worker: Starting to process text: '{text[:30]}...'", "DEBUG")
-        self.status_queue.put(("PLAY", "[~]", f"正在處理: {text[:20]}..."))
+        self.audio_status_queue.put(("PLAY", "[~]", f"正在處理: {text[:20]}..."))
 
         samples = None
         sample_rate = None
@@ -441,7 +516,7 @@ class AudioEngine:
             self.log(f"Retrieved phrase from cache: '{text[:20]}...'", "DEBUG")
         else:
             try:
-                if self.current_engine == ENGINE_SHERPA_ONNX:
+                if self.app_controller and self.current_engine in self.app_controller.get_sherpa_onnx_engines():
                     samples, sample_rate = self._synth_sherpa_onnx(text)
                     if samples is None: self.log(f"Sherpa-ONNX synthesis returned no samples for '{text[:20]}...'", "DEBUG"); return
 
@@ -463,7 +538,7 @@ class AudioEngine:
 
             except Exception as e:
                 self.log(f"合成失敗: {e}", "ERROR")
-                self.status_queue.put(("PLAY", "[❌]", f"合成失敗: {text[:20]}..."))
+                self.audio_status_queue.put(("PLAY", "[❌]", f"合成失敗: {text[:20]}..."))
                 return
         # --- End Caching Logic ---
         
@@ -472,7 +547,7 @@ class AudioEngine:
             self.log(f"Prepared {len(samples)} samples at SR {sample_rate} for playback.", "DEBUG")
         else:
             self.log(f"No samples prepared for playback for '{text[:20]}...'.", "ERROR") # Change to ERROR from original log.
-            self.status_queue.put(("PLAY", "[❌]", f"合成失敗，無法取得音訊數據: {text[:20]}..."))
+            self.audio_status_queue.put(("PLAY", "[❌]", f"合成失敗，無法取得音訊數據: {text[:20]}..."))
             return # Ensure to return if samples are None here
 
         self._play_audio(samples, sample_rate, text, is_preview)
@@ -482,6 +557,7 @@ class AudioEngine:
 
     def _play_audio(self, samples, sample_rate, text, is_preview):
         self.log(f"_play_audio called. Samples shape: {samples.shape}, SR: {sample_rate}, is_preview: {is_preview}", "DEBUG")
+        self.log(f"DEBUG: Applying TTS volume: {self.tts_volume}, Listen volume: {self.listen_volume}", "DEBUG")
 
         main_device_id = self._local_output_devices.get(self.local_output_device_name, sd.default.device[1])
         listen_device_id = self._listen_devices.get(self.listen_device_name, sd.default.device[1])
@@ -566,10 +642,10 @@ class AudioEngine:
             self.log(f"Error during audio playback to stream: {e}", "ERROR")
             import traceback
             self.log(traceback.format_exc(), "ERROR") # Log full traceback for better debugging
-            self.status_queue.put(("PLAY", "[❌]", f"播放時發生錯誤: {e}"))
+            self.audio_status_queue.put(("PLAY", "[❌]", f"播放時發生錯誤: {e}"))
             return
 
-        self.status_queue.put(("PLAY", "[✔]", f"播放完畢: {text[:20]}..."))
+        self.audio_status_queue.put(("PLAY", "[✔]", f"播放完畢: {text[:20]}..."))
 
     @staticmethod
     def _audiosegment_to_float32_numpy(audio_segment):
