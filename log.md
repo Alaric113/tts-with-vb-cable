@@ -6,6 +6,7 @@
 - 所做的具體更改（高層次概述）。
 - 任何新增的依賴項或配置。
 - 對於下一個階段的代理或開發者來說，需要了解的任何重要事項。
+- 盡量減少冗餘和重複的資訊，注重精煉和高層次概括，以減少儲存和處理的成本（token 浪費）。
 
 請確保這些資訊清晰、簡潔並具體，以便後續人員能夠快速理解並繼續工作。
 ---
@@ -225,3 +226,14 @@ pip install -r requirements-windows.txt
 
 **生成日期：** 2025年11月24日
 **生成者：** Gemini CLI Agent
+---
+
+## Agent Memory
+
+(For Gemini Agent use. Records high-level context to maintain continuity.)
+
+### Session: 2025-11-25
+
+*   **Summary:** Fixed startup `TypeError` for `QuickInputWindow`. Implemented missing hotkey editing logic for the main quick input, making the UI button checkable for better UX. Corrected the quick input window's positioning to be screen-relative based on user settings.
+*   **Key Files Modified:** `src/app/app.py`, `src/ui/main_window.py`.
+*   **Project Insight:** This `log.md` file serves as my session memory. Future entries should be concise.

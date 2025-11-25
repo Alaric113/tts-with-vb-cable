@@ -412,12 +412,102 @@ class LocalTTSPlayer(QObject):
         if not self.is_running: return
         self.audio.play_text(text)
 
-    # ===================== 快捷鍵編輯 (部分省略) =====================
-    # ... (此處省略部分未變更的快捷鍵編輯代碼以保持簡潔) ...
-    def _toggle_hotkey_edit(self): pass
-    def _update_hotkey_display(self, hotkey_str): pass
-    def _normalize_hotkey(self, hotkey_str): return hotkey_str
-    def _check_hotkey_conflict(self, *args, **kwargs): return None
+    # ===================== 快捷鍵編輯 =====================
+    def _key_to_str(self, key):
+        """將 pynput 的 key 物件轉換為標準化的字串表示。"""
+        if isinstance(key, keyboard.KeyCode):
+            return key.char.lower() if key.char and len(key.char) == 1 else ''
+        else:
+            key_name = key.name
+            if key_name.endswith(('_r', '_l')):
+                key_name = key_name[:-2]
+            return key_name
+
+    def _normalize_hotkey(self, hotkey_str):
+        """標準化快捷鍵字串，例如 'Ctrl+A' -> 'a+ctrl'。"""
+        if not hotkey_str:
+            return ""
+        parts = [part.strip().lower() for part in hotkey_str.split('+') if part.strip()]
+        parts.sort()
+        return "+".join(parts)
+
+    def _check_hotkey_conflict(self, hotkey_str, hotkey_type, index=None):
+        """檢查指定的快捷鍵是否與現有的快捷鍵衝突。"""
+        if not hotkey_str:
+            return None
+
+        normalized_hotkey = self._normalize_hotkey(hotkey_str)
+
+        if hotkey_type != 'main' and self.current_hotkey:
+            main_hotkey = self._normalize_hotkey(self.current_hotkey)
+            if main_hotkey == normalized_hotkey:
+                return f"此快捷鍵已被「快捷輸入框」使用。"
+
+        for i, phrase in enumerate(self.quick_phrases):
+            if hotkey_type == 'quick_phrase' and i == index:
+                continue
+            phrase_hotkey = self._normalize_hotkey(phrase.get("hotkey", ""))
+            if phrase_hotkey == normalized_hotkey:
+                phrase_text = phrase.get('text', '未命名')
+                if len(phrase_text) > 10:
+                    phrase_text = phrase_text[:10] + '...'
+                return f"此快捷鍵已被快捷語音 {i+1} ({phrase_text}) 使用。"
+
+        return None
+
+    def _toggle_hotkey_edit(self, checked):
+        btn = self.main_window.hotkey_edit_button
+        if checked:
+            self.log_message("進入快捷鍵編輯模式，請按下您想設定的組合鍵。")
+            btn.setText("錄製中...")
+            btn.setStyleSheet("background-color: #FF9500; color: white; font-weight: bold;")
+            self._pressed_keys.clear()
+            self._start_pynput_listener_for_main_hotkey()
+        else:
+            btn.setText("✏️ 編輯")
+            btn.setStyleSheet("")
+            if self._hotkey_recording_listener:
+                self._hotkey_recording_listener.stop()
+                self._hotkey_recording_listener = None
+
+    def _start_pynput_listener_for_main_hotkey(self):
+        from pynput import keyboard
+        pressed = set()
+
+        def on_press(key):
+            key_str = self._key_to_str(key)
+            if key_str:
+                pressed.add(key_str)
+                self._update_hotkey_display("+".join(sorted(list(pressed))))
+
+        def on_release(key):
+            hotkey_str = "+".join(sorted(list(pressed)))
+            normalized_hotkey = self._normalize_hotkey(hotkey_str)
+
+            conflict_msg = self._check_hotkey_conflict(normalized_hotkey, 'main')
+            if conflict_msg:
+                self.show_messagebox("快捷鍵衝突", conflict_msg, "warning")
+                self._update_hotkey_display(self.current_hotkey)
+            else:
+                self.current_hotkey = normalized_hotkey
+                self.config.set("hotkey", self.current_hotkey)
+                self._update_hotkey_display(self.current_hotkey)
+                self.log_message(f"快捷輸入框快捷鍵已更新為: {self.current_hotkey}")
+                if self.is_running:
+                    self._start_hotkey_listener()
+
+            self.main_window.hotkey_edit_button.setChecked(False)
+            return False
+
+        if self._hotkey_recording_listener:
+            self._hotkey_recording_listener.stop()
+        self._hotkey_recording_listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+        self._hotkey_recording_listener.start()
+
+    def _update_hotkey_display(self, hotkey_str):
+        display_text = hotkey_str or "尚未設定"
+        if self.main_window and self.main_window.hotkey_label:
+            self.main_window.hotkey_label.setText(display_text)
 
     # ===================== 快速輸入框 =====================
     def _show_quick_input(self):
@@ -428,8 +518,39 @@ class LocalTTSPlayer(QObject):
         try:
             if not self.quick_input_window:
                 from ..ui.popups import QuickInputWindow
-                self.quick_input_window = QuickInputWindow(self, parent=self.main_window)
+                self.quick_input_window = QuickInputWindow(self)
+
             win = self.quick_input_window
+            win.adjustSize()
+            screen_geometry = QApplication.primaryScreen().geometry()
+            screen_width = screen_geometry.width()
+            screen_height = screen_geometry.height()
+            win_width = win.width()
+            win_height = win.height()
+
+            pos = self.quick_input_position
+            margin = 30 # A small margin from screen edges
+            if pos == "center":
+                x = (screen_width - win_width) // 2
+                y = (screen_height - win_height) // 2
+            elif pos == "top-left":
+                x = margin
+                y = margin
+            elif pos == "top-right":
+                x = screen_width - win_width - margin
+                y = margin
+            elif pos == "bottom-left":
+                x = margin
+                y = screen_height - win_height - margin
+            elif pos == "bottom-right":
+                x = screen_width - win_width - margin
+                y = screen_height - win_height - margin
+            else: # Default to center
+                x = (screen_width - win_width) // 2
+                y = (screen_height - win_height) // 2
+            
+            win.move(x, y)
+
             win.show()
             win.activateWindow()
             win.raise_()

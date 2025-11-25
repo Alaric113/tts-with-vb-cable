@@ -620,8 +620,9 @@ class MainWindow(QMainWindow):
         layout.addLayout(keys_display_layout, 1, 0)
 
         self.hotkey_edit_button = QPushButton("✏️ 編輯")
+        self.hotkey_edit_button.setCheckable(True)
         self.hotkey_edit_button.setFixedWidth(100)
-        self.hotkey_edit_button.clicked.connect(self.app._toggle_hotkey_edit)
+        self.hotkey_edit_button.toggled.connect(self.app._toggle_hotkey_edit)
         layout.addWidget(self.hotkey_edit_button, 1, 1, Qt.AlignmentFlag.AlignRight)
 
         self.hotkey_info_label = QLabel("點擊 '編輯' 開始設定快捷鍵。")
