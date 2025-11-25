@@ -253,6 +253,8 @@ pip install -r requirements-windows.txt
 3.  **UI 與日誌調整：**
     *   在 `src/ui/main_window.py` 的 `_create_log_area` 方法中，為日誌視窗 (`QTextEdit`) 設定了 `setMinimumHeight(180)`，增加其可見高度。同時修正了一處 `self.log_text = QTextEdit()` 的重複定義。
     *   在 `src/ui/popups.py` 的 `QuickPhrasesWindow._save_and_close` 方法中，將觸發背景快取更新的日誌級別從 `INFO` 降級為 `DEBUG`。
+    *   在 `src/ui/popups.py` 的 `ModelManagementWindow._create_model_item_widget` 方法中，調整了模型項目的佈局，包括減少間距、增加卡片內邊距、調整模型名稱字體大小、新增模型描述（如果存在）、固定狀態標籤寬度並右對齊，以及固定下載和刪除按鈕的寬度，以改善視覺一致性和外觀。
+    *   在 `src/ui/popups.py` 的 `QuickPhrasesWindow._create_phrase_item_widget` 方法中，調整了快捷語音項目的佈局，包括減少間距、增加卡片內邊距、為輸入欄位分配彈性空間、固定快捷鍵按鈕和刪除按鈕的寬度，以改善視覺一致性和外觀。
 
 **新增的依賴項或配置：**
 - 無新的 Python 套件依賴。

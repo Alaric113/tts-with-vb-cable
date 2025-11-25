@@ -864,25 +864,26 @@ class QuickPhrasesWindow(BaseDialog):
         phrase_card = QFrame()
         phrase_card.setObjectName("PhraseItemCard")
         card_layout = QHBoxLayout(self._add_shadow(phrase_card))
-        card_layout.setSpacing(10)
+        card_layout.setSpacing(10) # Reduced spacing
+        card_layout.setContentsMargins(15, 10, 15, 10) # Add padding inside the card
 
         input_field = QLineEdit(phrase_data.get("text", ""))
         input_field.setPlaceholderText(f"快捷語音 {index + 1}...")
         input_field.editingFinished.connect(lambda i=index: self._update_phrase_text(i))
-        card_layout.addWidget(input_field)
+        card_layout.addWidget(input_field, 1) # Give it stretch
 
-        # --- 變更: 合併快捷鍵顯示與設定按鈕 ---
         hotkey_button = QPushButton(phrase_data.get("hotkey") or "設定快捷鍵")
         hotkey_button.setCheckable(True)
-        hotkey_button.setFixedWidth(120)
+        hotkey_button.setFixedWidth(120) # Consistent width
         hotkey_button.toggled.connect(lambda checked, i=index: self._record_quick_phrase_hotkey(i, checked))
         card_layout.addWidget(hotkey_button)
 
         delete_button = QPushButton("✕")
         delete_button.setObjectName("DeleteButton")
+        delete_button.setFixedSize(28, 28) # Consistent small size for delete
         delete_button.clicked.connect(lambda i=index: self._delete_phrase_item(i))
         card_layout.addWidget(delete_button)
-        # 在 addStretch 之前插入
+        # In _redraw_phrase_list, items are inserted before the addStretch, so this should be fine.
         self.scroll_layout.insertWidget(self.scroll_layout.count() - 1, phrase_card)
         self.ui_elements.append({
             "card": phrase_card,
