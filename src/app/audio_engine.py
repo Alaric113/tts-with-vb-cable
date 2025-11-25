@@ -68,6 +68,8 @@ class AudioEngine:
         self.play_queue = queue.Queue()
         self.worker_thread = None
 
+        self._audio_cache = {} # Initialize audio cache for quick phrases
+
     def start(self):
         self.worker_thread = threading.Thread(target=self._audio_worker, daemon=True)
         self.worker_thread.start()
@@ -178,7 +180,7 @@ class AudioEngine:
             self._sherpa_tts = sherpa_onnx.OfflineTts(tts_config)
             self.sherpa_speakers = [f"Speaker {i}" for i in range(self._sherpa_tts.num_speakers)]
             self.sherpa_model_id = model_id
-            self.log(f"Sherpa-ONNX 引擎已成功載入模型 '{model_id}'。", "INFO")
+            self.log(f"Sherpa-ONNX 引擎已成功載入模型 '{model_id}'。", "DEBUG")
             return True
         except Exception as e:
             self.log(f"載入 Sherpa-ONNX 模型失敗: {e}", "ERROR")
@@ -212,7 +214,7 @@ class AudioEngine:
                         break
             if best_candidate:
                 self.local_output_device_name = best_candidate
-                self.log(f"已自動綁定輸出設備：{self.local_output_device_name}", "INFO")
+                self.log(f"已自動綁定輸出設備：{self.local_output_device_name}", "DEBUG")
 
         except Exception as e:
             self.log(f"取得音效卡失敗: {e}", "ERROR")
@@ -253,6 +255,52 @@ class AudioEngine:
         self.enable_listen_to_self = bool(enable)
         self.listen_device_name = device_name
         self.listen_volume = float(volume)
+
+    def cache_phrase(self, phrase_info: dict):
+        text = phrase_info.get("text", "").strip()
+        if not text:
+            return
+
+        # Generate a unique key for the cache based on text and current TTS settings
+        cache_key_components = [
+            text,
+            self.current_engine,
+            self.current_voice,
+            str(self.tts_rate),
+            str(self.tts_volume),
+            str(self.tts_pitch)
+        ]
+        cache_key = hashlib.md5('+'.join(cache_key_components).encode('utf-8')).hexdigest()
+
+        # Check if already cached
+        if cache_key in self._audio_cache:
+            return
+
+        self.log(f"Caching phrase: '{text[:20]}...' (Engine: {self.current_engine})", "DEBUG")
+
+        samples = None
+        sample_rate = None
+        
+        loop = asyncio.new_event_loop() # Create a new event loop for async operations in this thread
+        asyncio.set_event_loop(loop)
+
+        try:
+            if self.current_engine == ENGINE_SHERPA_ONNX:
+                samples, sample_rate = self._synth_sherpa_onnx(text)
+            elif self.current_engine == ENGINE_EDGE:
+                samples, sample_rate = loop.run_until_complete(self._synth_edge_to_memory(text))
+            elif self.current_engine == ENGINE_PYTTX3:
+                samples, sample_rate = self._synth_pyttsx3_to_memory(text)
+            
+            if samples is not None and sample_rate is not None:
+                self._audio_cache[cache_key] = (samples, sample_rate)
+                self.log(f"Phrase cached successfully: '{text[:20]}...'", "DEBUG")
+            else:
+                self.log(f"Failed to cache phrase: '{text[:20]}...' (synthesis failed)", "WARNING")
+        except Exception as e:
+            self.log(f"Error caching phrase '{text[:20]}...': {e}", "ERROR")
+        finally:
+            loop.close()
 
     # ---------- 取得資訊 ----------
     def get_voice_names(self):
@@ -296,6 +344,29 @@ class AudioEngine:
         await comm.save(path)
         return True
 
+    async def _synth_edge_to_memory(self, text):
+        import edge_tts
+        global AudioSegment # Ensure pydub is imported
+        if AudioSegment is None: self._lazy_import()
+
+        rate_param = f"{int(round((self.tts_rate - 175) * (40 / 75))):+d}%"
+        volume_param = f"{int((self.tts_volume - 1.0) * 100):+d}%"
+        pitch_param = f"{int(self.tts_pitch):+d}Hz"
+        
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_file:
+            try:
+                comm = edge_tts.Communicate(text, self.current_voice, rate=rate_param, volume=volume_param, pitch=pitch_param)
+                await comm.save(tmp_file.name)
+                audio = AudioSegment.from_mp3(tmp_file.name)
+                samples = self._audiosegment_to_float32_numpy(audio)
+                sample_rate = audio.frame_rate
+                return samples, sample_rate
+            except Exception as e:
+                self.log(f"Edge TTS 合成到記憶體失敗: {e}", "ERROR")
+                return None, None
+            finally:
+                os.remove(tmp_file.name)
+
     def _synth_pyttsx3_to_file(self, text, path):
         if pyttsx3 is None: return False
         engine = None
@@ -310,6 +381,33 @@ class AudioEngine:
             return True
         finally:
             if engine: engine.stop()
+
+    def _synth_pyttsx3_to_memory(self, text):
+        global pyttsx3, AudioSegment # Ensure modules are imported
+        if pyttsx3 is None or AudioSegment is None: self._lazy_import()
+        if pyttsx3 is None or AudioSegment is None: return None, None
+
+        engine = None
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+            try:
+                engine = pyttsx3.init()
+                engine.setProperty("rate", self.tts_rate)
+                engine.setProperty("volume", self.tts_volume)
+                if self.pyttsx3_voice_id:
+                    engine.setProperty("voice", self.pyttsx3_voice_id)
+                engine.save_to_file(text, tmp_file.name)
+                engine.runAndWait()
+                
+                audio = AudioSegment.from_wav(tmp_file.name)
+                samples = self._audiosegment_to_float32_numpy(audio)
+                sample_rate = audio.frame_rate
+                return samples, sample_rate
+            except Exception as e:
+                self.log(f"pyttsx3 合成到記憶體失敗: {e}", "ERROR")
+                return None, None
+            finally:
+                if engine: engine.stop()
+                os.remove(tmp_file.name)
 
     # ---------- 播放 ----------
     def play_text(self, text: str):
@@ -326,41 +424,54 @@ class AudioEngine:
         samples = None
         sample_rate = None
 
-        try:
-            if self.current_engine == ENGINE_SHERPA_ONNX:
-                samples, sample_rate = self._synth_sherpa_onnx(text)
-                if samples is None: return
+        # --- New Caching Logic ---
+        cache_key_components = [
+            text,
+            self.current_engine,
+            self.current_voice,
+            str(self.tts_rate),
+            str(self.tts_volume),
+            str(self.tts_pitch)
+        ]
+        cache_key = hashlib.md5('+'.join(cache_key_components).encode('utf-8')).hexdigest()
 
-            elif self.current_engine == ENGINE_EDGE:
-                global AudioSegment
-                if AudioSegment is None: self._lazy_import()
-                with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_file:
-                    success = loop.run_until_complete(self._synth_edge_to_file(text, tmp_file.name))
-                    if not success: return
-                    audio = AudioSegment.from_mp3(tmp_file.name)
-                    samples = self._audiosegment_to_float32_numpy(audio)
-                    sample_rate = audio.frame_rate
-                os.remove(tmp_file.name)
+        if cache_key in self._audio_cache:
+            samples, sample_rate = self._audio_cache[cache_key]
+            self.log(f"Retrieved phrase from cache: '{text[:20]}...'", "DEBUG")
+        else:
+            try:
+                if self.current_engine == ENGINE_SHERPA_ONNX:
+                    samples, sample_rate = self._synth_sherpa_onnx(text)
+                    if samples is None: return
 
-            elif self.current_engine == ENGINE_PYTTX3:
-                if AudioSegment is None: self._lazy_import()
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                    if not self._synth_pyttsx3_to_file(text, tmp_file.name): return
-                    audio = AudioSegment.from_wav(tmp_file.name)
-                    samples = self._audiosegment_to_float32_numpy(audio)
-                    sample_rate = audio.frame_rate
-                os.remove(tmp_file.name)
-            
-            if samples is None:
-                self.log(f"合成失敗，無法取得音訊數據: '{text[:20]}...'", "ERROR")
+                elif self.current_engine == ENGINE_EDGE:
+                    global AudioSegment
+                    if AudioSegment is None: self._lazy_import()
+                    samples, sample_rate = loop.run_until_complete(self._synth_edge_to_memory(text))
+                    if samples is None: return
+
+                elif self.current_engine == ENGINE_PYTTX3:
+                    if AudioSegment is None: self._lazy_import()
+                    samples, sample_rate = self._synth_pyttsx3_to_memory(text)
+                    if samples is None: return
+                
+                # Cache the newly synthesized audio
+                if samples is not None and sample_rate is not None:
+                    self._audio_cache[cache_key] = (samples, sample_rate)
+                    self.log(f"Cached newly synthesized phrase: '{text[:20]}...'", "DEBUG")
+
+            except Exception as e:
+                self.log(f"合成失敗: {e}", "ERROR")
                 self.status_queue.put(("PLAY", "[❌]", f"合成失敗: {text[:20]}..."))
                 return
+        # --- End Caching Logic ---
+            
+        if samples is None:
+            self.log(f"合成失敗，無法取得音訊數據: '{text[:20]}...'", "ERROR")
+            self.status_queue.put(("PLAY", "[❌]", f"合成失敗: {text[:20]}..."))
+            return
 
-            self._play_audio(samples, sample_rate, text, is_preview)
-
-        except Exception as e:
-            self.log(f"播放錯誤: {e}", "ERROR")
-            self.status_queue.put(("PLAY", "[❌]", f"播放時發生錯誤"))
+        self._play_audio(samples, sample_rate, text, is_preview)
 
     @staticmethod
     def _resample_audio(samples, current_sr, target_sr):
@@ -390,39 +501,56 @@ class AudioEngine:
             main_sr = int(main_info.get('default_samplerate', sample_rate))
         except Exception:
             main_sr = sample_rate
+            self.log(f"Failed to query main device {main_device_id}, using synthesized sample rate {sample_rate}", "WARNING")
             
         try:
             listen_info = sd.query_devices(listen_device_id)
             listen_sr = int(listen_info.get('default_samplerate', sample_rate))
         except Exception:
             listen_sr = sample_rate
+            self.log(f"Failed to query listen device {listen_device_id}, using synthesized sample rate {sample_rate}", "WARNING")
 
-        # Resample if necessary
-        if sample_rate != main_sr:
-            # For simplicity, we're letting sounddevice handle resampling.
-            # For multi-device sync, manual resampling before playing is better.
-            self.log(f"Main device SR mismatch ({sample_rate} -> {main_sr}). Sounddevice will resample.", "DEBUG")
-
-        if sample_rate != listen_sr:
-            self.log(f"Listen device SR mismatch ({sample_rate} -> {listen_sr}). Sounddevice will resample.", "DEBUG")
-
-        threads = []
-        if play_to_main:
-            t_main = threading.Thread(target=sd.play, args=(samples_main, main_sr), kwargs={'device': main_device_id})
-            threads.append(t_main)
+        # Resample if necessary - sounddevice handles this when using OutputStream if different.
+        # However, for explicit control and potential future multi-channel mixing,
+        # manual resampling (e.g., with resampy) before feeding to stream might be better.
+        # For now, let's keep it simple and rely on sounddevice's internal resampling.
         
-        if play_to_listen:
-            t_listen = threading.Thread(target=sd.play, args=(samples_listen, listen_sr), kwargs={'device': listen_device_id})
-            threads.append(t_listen)
+        streams = []
+        try:
+            if play_to_main:
+                self.log(f"Starting main audio stream to device {main_device_id} at SR {main_sr}", "DEBUG")
+                main_stream = sd.OutputStream(
+                    samplerate=main_sr,
+                    channels=1, # Assuming mono output from TTS
+                    dtype=samples_main.dtype,
+                    device=main_device_id
+                )
+                streams.append((main_stream, samples_main))
             
-        if not threads:
+            if play_to_listen:
+                self.log(f"Starting listen audio stream to device {listen_device_id} at SR {listen_sr}", "DEBUG")
+                listen_stream = sd.OutputStream(
+                    samplerate=listen_sr,
+                    channels=1, # Assuming mono output from TTS
+                    dtype=samples_listen.dtype,
+                    device=listen_device_id
+                )
+                streams.append((listen_stream, samples_listen))
+
+            if not streams:
+                self.log("No audio streams to play.", "DEBUG")
+                return
+
+            for stream, data in streams:
+                with stream: # Use 'with' statement for proper resource management
+                    stream.write(data)
+                self.log(f"Audio stream to device {stream.device} finished.", "DEBUG")
+
+        except Exception as e:
+            self.log(f"Error during audio playback: {e}", "ERROR")
+            self.status_queue.put(("PLAY", "[❌]", f"播放時發生錯誤: {e}"))
             return
 
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        
         self.status_queue.put(("PLAY", "[✔]", f"播放完畢: {text[:20]}..."))
 
     @staticmethod

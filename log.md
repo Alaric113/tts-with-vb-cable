@@ -224,7 +224,45 @@ pip install -r requirements-windows.txt
 - 需要更新 `requirements-windows.txt` 以包含 `sherpa-onnx` 和 `torch` 等相關套件。
 ---
 
-**生成日期：** 2025年11月24日
+### **2025年11月25日 更新記錄**
+
+**修改目的與背景：**
+- 解決 `pynput` 庫在解析快捷鍵時遇到的 `ValueError` (如 `ValueError: shift` 和 `ValueError: f1`)，原因是 `pynput` 期望修飾鍵和特殊鍵以 `<key>` 格式傳入 `GlobalHotKeys`。
+- 解決 `AttributeError: 'ConfigManager' object has no attribute 'save_config'`，此為之前錯誤引用 `ConfigManager` 的 `save` 方法。
+- 實作音訊快取機制，以減少快捷語音的重複合成時間。
+- 調整 UI 日誌顯示，提高日誌視窗高度並過濾掉過於詳細的內部日誌訊息。
+
+**所涉及的檔案和模組：**
+- `src/app/app.py`
+- `src/app/audio_engine.py`
+- `src/ui/popups.py`
+- `src/ui/main_window.py`
+
+**所做的具體更改（高層次概述）：**
+1.  **快捷鍵系統強化 (src/app/app.py):**
+    *   修改 `_normalize_hotkey` 方法，使其能將修飾鍵（如 `shift`）和特殊鍵（如 `f1`）自動轉換為 `pynput` 期望的 `<key>` 格式（例如：`shift+z` -> `<shift>+z`, `f1` -> `<f1>`）。
+    *   更新 `_start_hotkey_listener` 方法，確保在註冊快捷鍵前，所有快捷鍵字串都經過 `_normalize_hotkey` 處理，並使用 `_is_hotkey_valid_for_pynput` 進行更嚴格的驗證。
+    *   將 `self.config.save_config()` 修正為 `self.config.save()`，解決 `ConfigManager` 的 `AttributeError`。
+    *   將多個關於熱鍵註冊、驗證的冗餘日誌級別從 `INFO` 降級為 `DEBUG`。
+2.  **音訊快取機制實作 (src/app/audio_engine.py):**
+    *   在 `AudioEngine` 的 `__init__` 方法中新增 `self._audio_cache` 字典用於儲存音訊數據。
+    *   新增 `_synth_edge_to_memory` 和 `_synth_pyttsx3_to_memory` 方法，用於將 Edge-TTS 和 pyttsx3 的合成結果直接輸出為記憶體中的 NumPy 數組，避免不必要的檔案 I/O。
+    *   實作 `cache_phrase` 方法，根據短語內容及當前 TTS 設定生成快取鍵，並將合成的音訊（NumPy 數組及採樣率）存入 `_audio_cache`。
+    *   修改 `_process_and_play_text` 方法，使其在處理播放請求時，優先檢查 `_audio_cache` 是否存在對應音訊，若有則直接使用，否則進行合成並存入快取。
+    *   將多個關於模型載入、設備綁定的冗餘日誌級別從 `INFO` 降級為 `DEBUG`。
+3.  **UI 與日誌調整：**
+    *   在 `src/ui/main_window.py` 的 `_create_log_area` 方法中，為日誌視窗 (`QTextEdit`) 設定了 `setMinimumHeight(180)`，增加其可見高度。同時修正了一處 `self.log_text = QTextEdit()` 的重複定義。
+    *   在 `src/ui/popups.py` 的 `QuickPhrasesWindow._save_and_close` 方法中，將觸發背景快取更新的日誌級別從 `INFO` 降級為 `DEBUG`。
+
+**新增的依賴項或配置：**
+- 無新的 Python 套件依賴。
+- 配置檔案 `config.json` 中的快捷鍵字串格式將會自動更新為帶有尖括號的格式（例如 `shift+z` -> `<shift>+z`）。
+
+**對於下一個階段的代理或開發者來說，需要了解的任何重要事項：**
+- 儘管熱鍵問題和音訊快取已實現，但模型下載與解壓縮的錯誤 (來自前次使用者反饋的 "model files incomplete" 錯誤) 仍未解決。需要等待使用者提供新的日誌來診斷此問題。
+- 由於 `pynput` 的特殊性，建議後續對熱鍵輸入的處理應始終使用 `_normalize_hotkey` 方法。
+
+**生成日期：** 2025年11月25日
 **生成者：** Gemini CLI Agent
 ---
 
@@ -234,6 +272,12 @@ pip install -r requirements-windows.txt
 
 ### Session: 2025-11-25
 
-*   **Summary:** Fixed startup `TypeError` for `QuickInputWindow`. Implemented missing hotkey editing logic for the main quick input, making the UI button checkable for better UX. Corrected the quick input window's positioning to be screen-relative based on user settings.
-*   **Key Files Modified:** `src/app/app.py`, `src/ui/main_window.py`.
-*   **Project Insight:** This `log.md` file serves as my session memory. Future entries should be concise.
+*   **Summary:**
+    *   **Initial `TypeError` Fix:** Removed an unexpected `parent` argument from `QuickInputWindow` constructor in `src/app/app.py`.
+    *   **Hotkey Editing Implementation:** Implemented missing hotkey editing logic in `src/app/app.py` (for the main quick input) and modified `src/ui/main_window.py` to make the hotkey edit button checkable, improving UX.
+    *   **Quick Input Positioning:** Corrected quick input window's positioning to be screen-relative in `src/app/app.py` based on user settings.
+    *   **`AttributeError` Fix:** Resolved `AttributeError: 'MainWindow' object has no attribute 'hotkey_label'` by replacing a button group with the expected `QLabel` in `_create_hotkey_card` in `src/ui/main_window.py`.
+    *   **Robust Hotkey Validation:** Hardened the hotkey system to prevent crashes from invalid (e.g., modifier-only) hotkeys saved in the user's config. The validation in `_start_hotkey_listener` in `app.py` now also clears invalid keys from the configuration to prevent the issue from recurring.
+    *   **Model Extraction Debugging:** Added detailed file logging to the `extract_tar_bz2` function in `src/utils/deps.py` to diagnose a "model files incomplete" error. Awaiting new logs from the user to analyze the archive's structure.
+*   **Key Files Modified:** `src/app/app.py`, `src/ui/main_window.py`, `src/ui/popups.py`, `src/utils/deps.py`.
+*   **Project Insight:** This `log.md` file serves as my session memory. Consistency between UI and logic is crucial. Hotkey validation must handle both setting and loading. When debugging file issues, adding logging to inspect intermediate states is an effective strategy.

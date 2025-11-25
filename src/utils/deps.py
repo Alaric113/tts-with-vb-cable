@@ -207,20 +207,43 @@ def extract_tar_bz2(tar_path: str, target_dir: str, progress_cb=None, log_cb=Non
         with tarfile.open(tar_path, "r:bz2") as tf:
             tf.extractall(path=tmp_extract_dir)
 
+        if log_cb:
+            log_cb(f"--- Extracted files in {tmp_extract_dir} ---", "INFO")
+            for root, dirs, files in os.walk(tmp_extract_dir):
+                level = root.replace(tmp_extract_dir, '').count(os.sep)
+                indent = ' ' * 4 * (level)
+                log_cb('{}{}/'.format(indent, os.path.basename(root)), "INFO")
+                sub_indent = ' ' * 4 * (level + 1)
+                for f in files:
+                    log_cb('{}{}'.format(sub_indent, f), "INFO")
+            log_cb("-------------------------------------------", "INFO")
+
         # 2. Check the contents of the temporary directory
         extracted_items = os.listdir(tmp_extract_dir)
         source_dir = tmp_extract_dir
-        
+        if log_cb:
+            log_cb(f"Top-level extracted items: {extracted_items}", "INFO")
+
         # 3. If there is a single directory inside, assume it's the root and move its contents
         if len(extracted_items) == 1 and os.path.isdir(os.path.join(tmp_extract_dir, extracted_items[0])):
             source_dir = os.path.join(tmp_extract_dir, extracted_items[0])
             if log_cb:
-                log_cb(f"Archive has a root directory: '{extracted_items[0]}'. Moving contents.", "INFO")
+                log_cb(f"Archive has a single root directory. Setting source_dir to: {source_dir}", "INFO")
+        
+        if log_cb:
+            log_cb(f"Final source_dir for moving files is: {source_dir}", "INFO")
+            try:
+                log_cb(f"Items to be moved: {os.listdir(source_dir)}", "INFO")
+            except Exception as e:
+                log_cb(f"Could not list items in source_dir: {e}", "ERROR")
+
 
         # 4. Move all files and subdirectories from the source directory to the final target directory
         for item_name in os.listdir(source_dir):
             s = os.path.join(source_dir, item_name)
             d = os.path.join(target_dir, item_name)
+            if log_cb:
+                log_cb(f"Moving '{s}' to '{d}'", "INFO")
             
             # Overwrite existing files/dirs in the destination
             if os.path.exists(d):
@@ -462,6 +485,8 @@ class ModelDownloader:
                 return True
             else:
                 self.log(f"解壓後模型檔案仍不完整，請手動檢查。", "ERROR")
+                for f in required_files:
+                    self.log(f"檢查檔案: {f}, 是否存在: {f.exists()}", "ERROR")
                 return False
         except Exception as e:
             self.log(f"下載或解壓模型 '{model_id}' 失敗: {e}", "ERROR")

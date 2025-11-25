@@ -393,20 +393,67 @@ class LocalTTSPlayer(QObject):
 
     def _start_hotkey_listener(self):
         try:
-            if self.hotkey_listener: self.hotkey_listener.stop()
+            if self.hotkey_listener:
+                self.hotkey_listener.stop()
+            
+            self.log_message(f"準備註冊快捷鍵。主要快捷鍵: '{self.current_hotkey}'", "DEBUG")
+
             hotkeys = {}
+            config_changed = False
+
+            # Validate and format main hotkey
             if self.current_hotkey:
-                hotkeys[self.current_hotkey] = self._show_quick_input
+                normalized_main_hotkey = self._normalize_hotkey(self.current_hotkey)
+                if self._is_hotkey_valid_for_pynput(self.current_hotkey): # Pass original for validation, it will normalize internally
+                    hotkeys[normalized_main_hotkey] = self._show_quick_input
+                    # Update config if normalization changed the format (e.g., 'shift+z' to '<shift>+z')
+                    if normalized_main_hotkey != self.current_hotkey:
+                        self.config.set("hotkey", normalized_main_hotkey)
+                        self.current_hotkey = normalized_main_hotkey
+                        config_changed = True
+                else:
+                    self.log_message(f"已忽略並清除無效的主要快捷鍵 '{self.current_hotkey}'。請重新設定。", "WARN")
+                    self.current_hotkey = ""
+                    self.config.set("hotkey", "")
+                    config_changed = True
+
+            # Validate and format quick phrase hotkeys
             if self.enable_quick_phrases:
-                for phrase in self.quick_phrases:
-                    if phrase.get("hotkey") and phrase.get("text"):
-                        import functools
-                        hotkeys[phrase["hotkey"]] = functools.partial(self._play_quick_phrase, phrase["text"], phrase_info=phrase)
+                for i, phrase in enumerate(self.quick_phrases):
+                    phrase_hotkey = phrase.get("hotkey")
+                    if phrase_hotkey and phrase.get("text"):
+                        self.log_message(f"正在驗證快捷語音 {i} 的快捷鍵: '{phrase_hotkey}'", "DEBUG")
+                        normalized_phrase_hotkey = self._normalize_hotkey(phrase_hotkey)
+                        if self._is_hotkey_valid_for_pynput(phrase_hotkey): # Pass original for validation
+                            import functools
+                            hotkeys[normalized_phrase_hotkey] = functools.partial(self._play_quick_phrase, phrase["text"], phrase_info=phrase)
+                            # Update config if normalization changed the format
+                            if normalized_phrase_hotkey != phrase_hotkey:
+                                phrase["hotkey"] = normalized_phrase_hotkey
+                                config_changed = True
+                        else:
+                            self.log_message(f"已忽略並清除快捷語音的無效快捷鍵 '{phrase_hotkey}'。", "WARN")
+                            phrase["hotkey"] = ""
+                            config_changed = True
+            
+            if config_changed:
+                self.config.set("quick_phrases", self.quick_phrases)
+                self.config.save() # Save changes if any hotkey was normalized or cleared
+
+            if not hotkeys:
+                self.log_message("沒有有效的快捷鍵可供監聽。", "INFO")
+                if self.hotkey_listener:
+                    self.hotkey_listener.stop()
+                return
+
+            self.log_message(f"最終註冊的快捷鍵: {hotkeys}", "DEBUG")
             self.hotkey_listener = keyboard.GlobalHotKeys(hotkeys)
             self.hotkey_listener.start()
             self.log_message(f"服務已啟動，監聽 {len(hotkeys)} 個快捷鍵。")
         except Exception as e:
             self.log_message(f"快捷鍵啟動失敗: {e}。請檢查格式或重啟應用。", "ERROR")
+            import traceback
+            self.log_message(traceback.format_exc(), "ERROR")
 
     def _play_quick_phrase(self, text, phrase_info=None):
         if not self.is_running: return
@@ -424,12 +471,61 @@ class LocalTTSPlayer(QObject):
             return key_name
 
     def _normalize_hotkey(self, hotkey_str):
-        """標準化快捷鍵字串，例如 'Ctrl+A' -> 'a+ctrl'。"""
+        """
+        Normalizes a hotkey string for pynput, wrapping modifiers and special keys in <>.
+        Example: 'Ctrl+A' -> '<ctrl>+a', 'f1' -> '<f1>'.
+        """
         if not hotkey_str:
             return ""
-        parts = [part.strip().lower() for part in hotkey_str.split('+') if part.strip()]
-        parts.sort()
-        return "+".join(parts)
+        
+        parts = {part.strip().lower() for part in hotkey_str.split('+') if part.strip()}
+        
+        modifiers = {'ctrl', 'alt', 'shift', 'cmd', 'alt_gr', 'win'} # Include 'alt_gr', 'win' for completeness
+        # Add common special keys that pynput might expect in angle brackets
+        special_keys = {
+            'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12',
+            'esc', 'insert', 'delete', 'home', 'end', 'page_up', 'page_down',
+            'up', 'down', 'left', 'right', 'space', 'tab', 'enter', 'backspace',
+            'caps_lock', 'num_lock', 'scroll_lock', 'print_screen', 'pause'
+        }
+        
+        final_parts = []
+        found_bracketed_keys = [] # For keys that need angle brackets
+        found_other_keys = []    # For regular character keys
+
+        for part in parts:
+            if part in modifiers or part in special_keys:
+                found_bracketed_keys.append(f"<{part}>")
+            else:
+                found_other_keys.append(part)
+        
+        # Sort for consistency
+        found_bracketed_keys.sort()
+        found_other_keys.sort()
+
+        return "+".join(found_bracketed_keys + found_other_keys)
+
+    def _is_hotkey_valid_for_pynput(self, hotkey_str: str) -> bool:
+        """
+        檢查快捷鍵字串是否為 pynput 可接受的有效格式。
+        pynput 要求快捷鍵必須包含至少一個非修飾鍵。
+        會先進行正規化，確保修飾鍵有尖括號包覆。
+        """
+        if not hotkey_str:
+            return False
+        
+        # 先進行正規化，確保修飾鍵格式正確
+        normalized_hotkey_str = self._normalize_hotkey(hotkey_str)
+        
+        # 移除尖括號，以便檢查是否包含非修飾鍵
+        # pynput 的 parse 函數會將 'shift', 'ctrl', 'alt', 'alt_gr', 'win' 識別為修飾鍵
+        modifier_keys_raw = {'shift', 'ctrl', 'alt', 'alt_gr', 'win'}
+        
+        parts = normalized_hotkey_str.replace('<', '').replace('>', '').split('+')
+        has_non_modifier = any(part.lower() not in modifier_keys_raw for part in parts)
+        
+        # 確保至少有一個非修飾鍵且總部件數至少為1
+        return has_non_modifier and len(parts) >= 1
 
     def _check_hotkey_conflict(self, hotkey_str, hotkey_type, index=None):
         """檢查指定的快捷鍵是否與現有的快捷鍵衝突。"""
@@ -481,6 +577,15 @@ class LocalTTSPlayer(QObject):
                 self._update_hotkey_display("+".join(sorted(list(pressed))))
 
         def on_release(key):
+            modifiers = {'ctrl', 'alt', 'shift', 'cmd'}
+            non_modifiers = [k for k in pressed if k not in modifiers]
+
+            if not pressed or not non_modifiers:
+                self.show_messagebox("無效的快捷鍵", "快捷鍵必須包含至少一個非修飾鍵 (例如 A, B, 1, 2)。", "warning")
+                self._update_hotkey_display(self.current_hotkey)
+                self.main_window.hotkey_edit_button.setChecked(False)
+                return False
+
             hotkey_str = "+".join(sorted(list(pressed)))
             normalized_hotkey = self._normalize_hotkey(hotkey_str)
 

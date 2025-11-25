@@ -606,18 +606,11 @@ class MainWindow(QMainWindow):
         hotkey_card = QFrame()
         hotkey_card.setObjectName("BubbleCard")
         layout = QGridLayout(self._add_shadow(hotkey_card))
-        layout.addWidget(QLabel("快速輸入框快捷鍵:"), 0, 0, 1, 2)
+        layout.addWidget(QLabel("快速輸入框快捷鍵:"), 0, 0)
         
-        keys_display_layout = QHBoxLayout()
-        self.hotkey_key_buttons = []
-        for i in range(3):
-            btn = QPushButton("")
-            btn.setFixedSize(80, 38) # Match button height
-            btn.setEnabled(False)
-            btn.clicked.connect(lambda _, b=i: self.app._prepare_single_key_recording(b))
-            keys_display_layout.addWidget(btn)
-            self.hotkey_key_buttons.append(btn)
-        layout.addLayout(keys_display_layout, 1, 0)
+        self.hotkey_label = QLabel("尚未設定")
+        self.hotkey_label.setStyleSheet("font-size: 16px; font-weight: bold;")
+        layout.addWidget(self.hotkey_label, 1, 0)
 
         self.hotkey_edit_button = QPushButton("✏️ 編輯")
         self.hotkey_edit_button.setCheckable(True)
@@ -692,12 +685,12 @@ class MainWindow(QMainWindow):
         # --- 核心修改: 將 log_text 提升為實例屬性 ---
         # 這樣 app.py 才能直接控制它的可見性
         self.log_text = QTextEdit()
-
-        self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setObjectName("LogArea")
         self.log_text.setStyleSheet(f"QTextEdit#LogArea {{ border-top-left-radius: 0; border-top-right-radius: 0; border-top: none; }}")
         self.log_text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        # --- NEW: Set minimum height for log_text ---
+        self.log_text.setMinimumHeight(180) # Adjust this value as needed
         layout.addWidget(self.log_text)
 
         return log_widget

@@ -500,25 +500,36 @@ class ModelManagementWindow(BaseDialog):
         card = QFrame()
         card.setObjectName("ModelItemCard")
         layout = QHBoxLayout(self._add_shadow(card))
-        layout.setSpacing(15)
+        layout.setSpacing(10) # Reduce spacing slightly for a more compact look
+        layout.setContentsMargins(15, 10, 15, 10) # Add some padding inside the card
 
         name_label = QLabel(model_id)
-        name_label.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-        layout.addWidget(name_label, 1)
+        name_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold)) # Slightly smaller font
+        layout.addWidget(name_label) # Removed stretch to make space for description
+
+        # Add a small description or language if available and relevant
+        if model_config.get("description"):
+            desc_label = QLabel(model_config["description"])
+            desc_label.setStyleSheet("color: #666; font-size: 10px;")
+            layout.addWidget(desc_label)
+        layout.addStretch(1) # Add stretch after name/description
 
         status_label = QLabel()
         status_label.setObjectName("StatusLabel")
+        status_label.setFixedWidth(60) # Fixed width for status to align them
+        status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter) # Align status text right
         layout.addWidget(status_label)
 
         download_button = QPushButton("下載")
         download_button.setObjectName("DownloadButton")
+        download_button.setFixedWidth(80) # Fixed width for consistency
         download_button.clicked.connect(lambda: self.app.download_model(model_id))
+        layout.addWidget(download_button)
         
         delete_button = QPushButton("刪除")
         delete_button.setObjectName("DeleteButton")
+        delete_button.setFixedWidth(80) # Fixed width for consistency
         delete_button.clicked.connect(lambda: self.app.delete_model(model_id))
-
-        layout.addWidget(download_button)
         layout.addWidget(delete_button)
 
         self.ui_elements[model_id] = {
@@ -903,7 +914,7 @@ class QuickPhrasesWindow(BaseDialog):
             self.app._start_hotkey_listener()
         
         # --- 快取邏輯: 觸發背景快取生成 ---
-        self.app.log_message("開始在背景更新快捷語音快取...")
+        self.app.log_message("開始在背景更新快捷語音快取...", "DEBUG")
         for phrase in self.app.quick_phrases:
             if phrase.get("text") and phrase.get("hotkey"):
                 self.app.audio.cache_phrase(phrase)
@@ -959,13 +970,18 @@ class QuickPhrasesWindow(BaseDialog):
                 pressed.add(key_str)
 
         def on_release(key):
+            if pressed:
+                modifiers = {'ctrl', 'alt', 'shift', 'cmd'}
+                non_modifiers = [k for k in pressed if k not in modifiers]
+                if not non_modifiers:
+                    self.hotkey_recorded_signal.emit(index_to_edit, "", "快捷鍵必須包含至少一個非修飾鍵 (例如 A, B, 1, 2)。")
+                    return False
+
             hotkey_str = "+".join(sorted(list(pressed))) if pressed else ""
             normalized_hotkey = self.app._normalize_hotkey(hotkey_str)
 
             conflict_msg = self.app._check_hotkey_conflict(normalized_hotkey, 'quick_phrase', index_to_edit)
             
-            # --- 修正: 不直接操作 UI，而是發射信號 ---
-            # 發射信號，將 UI 更新任務交給主執行緒
             self.hotkey_recorded_signal.emit(index_to_edit, normalized_hotkey, conflict_msg or "")
 
             return False
@@ -982,7 +998,7 @@ class QuickPhrasesWindow(BaseDialog):
         """在主執行緒中安全地處理快捷鍵錄製完成後的 UI 更新。"""
         if conflict_msg:
             # 使用 app controller 的安全訊息框方法
-            self.app.show_messagebox("快捷鍵衝突", conflict_msg, "warning")
+            self.app.show_messagebox("快捷鍵問題", conflict_msg, "warning")
         else:
             # 在主執行緒中更新數據
             self.phrases_buffer[index]["hotkey"] = hotkey_str

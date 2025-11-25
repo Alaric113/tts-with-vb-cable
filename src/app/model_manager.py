@@ -12,9 +12,7 @@ PREDEFINED_MODELS = {
         "download_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-zh-aishell3.tar.bz2",
         "file_names": [
             "vits-aishell3.onnx",
-            "tokens.txt",
-            "lexicon.txt",
-            "rule.fsts"
+            "tokens.txt"
         ]
     }
     # Future models can be added here
