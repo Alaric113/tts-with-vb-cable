@@ -1,7 +1,7 @@
 PyQt6
 pynput
 sounddevice
-numpy
+numpy<2.0
 pydub
 edge-tts
 pyinstaller
@@ -10,3 +10,5 @@ requests
 packaging
 comtypes; sys_platform == 'win32'
 pywin32; sys_platform == 'win32'
+sherpa-onnx>=1.9.0
+soundfile
