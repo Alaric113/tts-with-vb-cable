@@ -27,19 +27,39 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+REM --- NEW: Assemble the final directory structure ---
+echo [ASSEMBLE] Assembling final application structure...
+set MAIN_APP_DIR="dist\JuMouth"
+set WIZARD_DIR="dist\update_wizard"
+set INTERNAL_DIR_PARENT="%MAIN_APP_DIR%\"
+set INTERNAL_DIR="%MAIN_APP_DIR%\_internal"
+set FINAL_WIZARD_PATH="%INTERNAL_DIR%\update_wizard"
+
+if not exist %WIZARD_DIR% (
+    echo [ERROR] PyInstaller did not create the update_wizard directory.
+    pause
+    exit /b 1
+)
+
+echo [ASSEMBLE] Creating _internal directory.
+mkdir %INTERNAL_DIR%
+echo [ASSEMBLE] Moving update_wizard into _internal.
+move %WIZARD_DIR% %INTERNAL_DIR%
+echo [ASSEMBLE] Final structure assembled successfully.
+
 REM --- Zip _internal folder ---
 echo [ZIP] Zipping _internal folder for GitHub Release...
-set INTERNAL_DIR="dist\JuMouth\_internal"
+set INTERNAL_DIR_TO_ZIP="dist\JuMouth\_internal"
 set INTERNAL_ZIP="dist\JuMouth\_internal.zip"
 
-if exist %INTERNAL_DIR% (
-    powershell -command "Compress-Archive -Path '%INTERNAL_DIR%\*' -DestinationPath '%INTERNAL_ZIP%'"
+if exist %INTERNAL_DIR_TO_ZIP% (
+    powershell -command "Compress-Archive -Path '%INTERNAL_DIR_TO_ZIP%\*' -DestinationPath '%INTERNAL_ZIP%'"
     if %errorlevel% neq 0 (
         echo [ERROR] Failed to create _internal.zip!
         pause
         exit /b 1
     )
-    rmdir /s /q %INTERNAL_DIR%
+    rmdir /s /q %INTERNAL_DIR_TO_ZIP%
     echo [ZIP] _internal.zip created and _internal folder removed.
 ) else (
     echo [ZIP] _internal folder not found, skipping zipping.

@@ -186,18 +186,8 @@ wizard_exe = EXE(
 )
 
 # --- 最終打包結構 ---
-# 將 update_wizard.exe 及其依賴打包到一個名為 'update_wizard' 的資料夾中
-wizard_coll = COLLECT(
-    wizard_exe,
-    b.binaries,
-    b.zipfiles,
-    b.datas,
-    name='update_wizard'
-)
-
-# --- 最終修正: 重新組織最終的 COLLECT 結構 ---
-# 1. 建立主應用程式的集合
-main_coll = COLLECT(
+# 1. 建立主應用程式的集合 (will be created in dist/JuMouth)
+coll_main = COLLECT(
     main_exe,
     a.binaries,
     a.zipfiles,
@@ -208,7 +198,14 @@ main_coll = COLLECT(
     name=APP_NAME,
 )
 
-# 2. 將更新精靈集合作為資料加入到主集合中，並指定正確的路徑
-main_coll.toc.append(('_internal/update_wizard', wizard_coll, 'COLLECT'))
-
-coll = main_coll
+# 2. 建立更新精靈的獨立集合 (will be created in dist/update_wizard)
+coll_wizard = COLLECT(
+    wizard_exe,
+    b.binaries,
+    b.zipfiles,
+    b.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='update_wizard'
+)
