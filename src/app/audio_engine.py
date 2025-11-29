@@ -555,6 +555,16 @@ class AudioEngine:
 
 
 
+    def _play_stream_threaded(self, stream, data, stream_name):
+        """Plays an audio stream in a separate thread."""
+        try:
+            self.log(f"Opening and writing to {stream_name} stream. Data shape: {data.shape}, dtype: {data.dtype}", "DEBUG")
+            with stream:
+                stream.write(data)
+            self.log(f"Audio stream to device {stream.device} finished.", "DEBUG")
+        except Exception as e:
+            self.log(f"Error during audio playback to stream {stream_name}: {e}", "ERROR")
+
     def _play_audio(self, samples, sample_rate, text, is_preview):
         self.log(f"_play_audio called. Samples shape: {samples.shape}, SR: {sample_rate}, is_preview: {is_preview}", "DEBUG")
         self.log(f"DEBUG: Applying TTS volume: {self.tts_volume}, Listen volume: {self.listen_volume}", "DEBUG")
@@ -589,13 +599,14 @@ class AudioEngine:
             listen_sr = sample_rate
             self.log(f"Failed to query listen device {listen_device_id}, using synthesized sample rate {sample_rate}", "WARNING")
         
-        streams = []
+        streams_to_play = []
+        threads = []
+
         try:
             # Resample for main stream if necessary
             resampled_samples_main = samples_main
             if play_to_main and sample_rate != main_sr:
                 self.log(f"Resampling main stream from {sample_rate} Hz to {main_sr} Hz.", "DEBUG")
-                # Calculate new number of samples
                 num_samples_resampled = int(len(samples_main) * main_sr / sample_rate)
                 resampled_samples_main = resample(samples_main, num_samples_resampled)
                 
@@ -603,45 +614,45 @@ class AudioEngine:
             resampled_samples_listen = samples_listen
             if play_to_listen and sample_rate != listen_sr:
                 self.log(f"Resampling listen stream from {sample_rate} Hz to {listen_sr} Hz.", "DEBUG")
-                # Calculate new number of samples
                 num_samples_resampled = int(len(samples_listen) * listen_sr / sample_rate)
                 resampled_samples_listen = resample(samples_listen, num_samples_resampled)
-
 
             if play_to_main:
                 self.log(f"Preparing main audio stream to device {main_device_id} at SR {main_sr}", "DEBUG")
                 main_stream = sd.OutputStream(
                     samplerate=main_sr,
-                    channels=1, # Assuming mono output from TTS
-                    dtype=resampled_samples_main.dtype, # Use dtype of resampled data
+                    channels=1,
+                    dtype=resampled_samples_main.dtype,
                     device=main_device_id
                 )
-                streams.append((main_stream, resampled_samples_main, f"Main ({main_device_id})"))
+                streams_to_play.append({'stream': main_stream, 'data': resampled_samples_main, 'name': f"Main ({main_device_id})"})
             
             if play_to_listen:
                 self.log(f"Preparing listen audio stream to device {listen_device_id} at SR {listen_sr}", "DEBUG")
                 listen_stream = sd.OutputStream(
                     samplerate=listen_sr,
-                    channels=1, # Assuming mono output from TTS
-                    dtype=resampled_samples_listen.dtype, # Use dtype of resampled data
+                    channels=1,
+                    dtype=resampled_samples_listen.dtype,
                     device=listen_device_id
                 )
-                streams.append((listen_stream, resampled_samples_listen, f"Listen ({listen_device_id})"))
+                streams_to_play.append({'stream': listen_stream, 'data': resampled_samples_listen, 'name': f"Listen ({listen_device_id})"})
 
-            if not streams:
+            if not streams_to_play:
                 self.log("No audio streams to play.", "DEBUG")
                 return
 
-            for stream, data, stream_name in streams:
-                self.log(f"Opening and writing to {stream_name} stream. Data shape: {data.shape}, dtype: {data.dtype}", "DEBUG")
-                with stream: # Use 'with' statement for proper resource management
-                    stream.write(data)
-                self.log(f"Audio stream to device {stream.device} finished.", "DEBUG")
+            for s_info in streams_to_play:
+                thread = threading.Thread(target=self._play_stream_threaded, args=(s_info['stream'], s_info['data'], s_info['name']))
+                threads.append(thread)
+                thread.start()
+
+            for thread in threads:
+                thread.join()
 
         except Exception as e:
-            self.log(f"Error during audio playback to stream: {e}", "ERROR")
+            self.log(f"Error during audio playback setup: {e}", "ERROR")
             import traceback
-            self.log(traceback.format_exc(), "ERROR") # Log full traceback for better debugging
+            self.log(traceback.format_exc(), "ERROR")
             self.audio_status_queue.put(("PLAY", "[❌]", f"播放時發生錯誤: {e}"))
             return
 

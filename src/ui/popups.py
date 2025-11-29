@@ -60,79 +60,79 @@ class BaseDialog(QWidget):
         # --- 樣式表 ---
         self.setStyleSheet(f"""
             #BaseDialogFrame {{
-                background-color: rgb({self.BG_COLOR_RGB});
+                background-color: rgb({self.bg_color_rgb});
                 border-radius: 12px;
             }}
             QDialog {{
                 background-color: transparent;
-                color: {self.TEXT_COLOR};
+                color: {self.text_color};
             }}
             QLabel, QCheckBox, QRadioButton {{
                 background-color: transparent;
-                color: {self.TEXT_COLOR};
+                color: {self.text_color};
             }}
             QLabel#StatusLabel {{
                 font-weight: bold;
             }}
             QLineEdit {{
-                border: 1px solid {self.BORDER_COLOR};
+                border: 1px solid {self.border_color};
                 border-radius: 8px;
                 padding: 5px 8px;
-                background-color: {self.INPUT_BG_COLOR};
+                background-color: {self.input_bg_color};
                 color: #000000; /* 確保輸入框文字為黑色 */
             }}
             QPushButton {{
-                background-color: {self.BUTTON_BG_COLOR};
-                color: {self.TEXT_COLOR};
+                background-color: {self.button_bg_color};
+                color: {self.text_color};
                 border: none;
                 padding: 8px 16px;
                 border-radius: 15px;
                 font-weight: 500;
             }}
             QPushButton:hover {{
-                background-color: {self.BUTTON_HOVER_COLOR};
+                background-color: {self.button_hover_color};
             }}
             QPushButton:disabled {{
-                background-color: {self.DISABLED_BG_COLOR};
-                color: {self.DISABLED_TEXT_COLOR};
+                background-color: {self.disabled_bg_color};
+                color: {self.disabled_text_color};
             }}
             QPushButton#DownloadButton {{
-                background-color: {self.ACCENT_COLOR};
-                color: {self.ACCENT_TEXT_COLOR};
+                background-color: {self.accent_color};
+                color: {self.accent_text_color};
             }}
             QPushButton#DeleteButton {{
-                background-color: {self.STATUS_RED_COLOR};
-                color: {self.ACCENT_TEXT_COLOR};
+                background-color: {self.status_red_color};
+                color: {self.accent_text_color};
             }}
             QComboBox {{
                 padding: 8px;
-                border: 1px solid {self.BORDER_COLOR};
+                border: 1px solid {self.border_color};
                 border-radius: 15px;
-                background-color: rgba({self.SUB_CARD_BG_COLOR_RGB}, {self.SUB_CARD_OPACITY});
-                color: {self.TEXT_COLOR};
+                background-color: rgba({self.sub_card_bg_color_rgb}, {self.sub_card_opacity});
+                color: {self.text_color};
             }}
             QSlider::groove:horizontal {{
                 border: none;
                 height: 6px;
-                background: {self.SLIDER_GROOVE_COLOR};
+                background: {self.slider_groove_color};
                 margin: 2px 0;
                 border-radius: 3px;
             }}
             QSlider::handle:horizontal {{
-                background: rgba({self.CARD_BG_COLOR_RGB}, {self.CARD_OPACITY});
-                border: 2px solid {self.ACCENT_COLOR};
+                background: rgba({self.card_bg_color_rgb}, {self.card_opacity});
+                border: 2px solid {self.accent_color};
                 width: 16px;
                 margin: -7px 0;
                 border-radius: 10px;
             }}
             QFrame#SubCard {{
-                background-color: rgba({self.SUB_CARD_BG_COLOR_RGB}, 0.7);
+                background-color: rgba({self.sub_card_bg_color_rgb}, 0.7);
                 border-radius: 18px;
             }}
             QFrame#Card {{
-                background-color: rgba({self.CARD_BG_COLOR_RGB}, {self.CARD_OPACITY});
+                background-color: rgba({self.card_bg_color_rgb}, {self.card_opacity});
                 border-radius: 18px;
-                border: 1px solid {self.BORDER_COLOR};
+                border: 1px solid {self.border_color};
             }}
             /* --- 新增: 快捷語音項目卡片樣式 --- */
             QFrame#PhraseItemCard, QFrame#ModelItemCard {{
@@ -171,14 +171,14 @@ class BaseDialog(QWidget):
 
             QLabel#KeyLabel {{
                 padding: 4px 10px;
-                background-color: {self.KEY_LABEL_BG_COLOR};
+                background-color: {self.key_label_bg_color};
                 border-radius: 8px;
                 font-weight: 500;
                 color: #000000;
             }}
             QPushButton#DeleteButton {{
                 background-color: transparent;
-                color: {self.STATUS_RED_COLOR};
+                color: {self.status_red_color};
                 font-size: 18px;
                 font-weight: bold;
                 border-radius: 14px;
@@ -188,7 +188,7 @@ class BaseDialog(QWidget):
                 max-width: 28px;
             }}
             QPushButton#DeleteButton:hover {{
-                background-color: {self.STATUS_RED_COLOR};
+                background-color: {self.status_red_color};
                 color: white;
             }}
             /* --- CheckBox --- */
@@ -201,7 +201,7 @@ class BaseDialog(QWidget):
                 background-color: #DCDFE4;
             }}
             QCheckBox::indicator:checked {{
-                background-color: {self.ACCENT_COLOR};
+                background-color: {self.accent_color};
             }}
             QCheckBox::handle {{
                 /* This is the white ball */
@@ -234,7 +234,7 @@ class BaseDialog(QWidget):
             #TitleBarButton:hover {{
                 color: #333333;
             }}
-            #CloseButton:hover {{ background-color: {self.STATUS_RED_COLOR}; color: white; }}
+            #CloseButton:hover {{ background-color: {self.status_red_color}; color: white; }}
         """)
 
         # --- 核心修改: 簡化佈局 ---
@@ -604,13 +604,13 @@ class ModelManagementWindow(BaseDialog):
 
         if is_downloaded:
             widgets["status_label"].setText("已下載")
-            widgets["status_label"].setStyleSheet(f"color: {self.STATUS_GREEN_COLOR};")
+            widgets["status_label"].setStyleSheet(f"color: {self.status_green_color};")
             widgets["download_button"].hide()
             widgets["delete_button"].show()
             widgets["progress_bar"].hide() # Hide progress bar when downloaded
         else:
             widgets["status_label"].setText("未下載")
-            widgets["status_label"].setStyleSheet(f"color: {self.STATUS_ORANGE_COLOR};")
+            widgets["status_label"].setStyleSheet(f"color: {self.status_orange_color};")
             widgets["download_button"].show()
             widgets["delete_button"].hide()
             widgets["progress_bar"].hide() # Initially hidden until download starts
@@ -638,7 +638,7 @@ class ModelManagementWindow(BaseDialog):
                 widgets["progress_bar"].hide()
                 self._update_model_item_status(model_id) # Re-evaluate status to show "未下載" or similar
                 widgets["status_label"].setText("下載失敗")
-                widgets["status_label"].setStyleSheet(f"color: {self.STATUS_RED_COLOR};")
+                widgets["status_label"].setStyleSheet(f"color: {self.status_red_color};")
 
 class AddCustomVoiceDialog(QDialog):
     """一個用於新增或編輯自訂語音的小對話框。"""
@@ -1035,7 +1035,7 @@ class QuickPhrasesWindow(BaseDialog):
                     elem["delete_button"].setEnabled(False)
 
             current_btn.setText("錄製中...") # 樣式由 QSS 處理
-            current_btn.setStyleSheet(f"background-color: {self.STATUS_ORANGE_COLOR}; color: {self.ACCENT_TEXT_COLOR}; font-weight: bold;")
+            current_btn.setStyleSheet(f"background-color: {self.status_orange_color}; color: {self.accent_text_color}; font-weight: bold;")
             self._start_pynput_listener(index_to_edit)
         else: # 使用者手動點擊取消錄製
             self.app.log_message("使用者取消了快捷鍵錄製。")

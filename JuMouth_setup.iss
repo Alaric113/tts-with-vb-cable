@@ -1,12 +1,14 @@
 ; JuMouth Inno Setup Script
 ; -- 由 Gemini Code Assist 生成 --
 
+#define MyAppVersion "1.0.0" ; 預設版本，可被命令列覆寫
+
 [Setup]
 ; 註：AppId 是應用程式的唯一標識符。建議為每個新應用生成一個新的 GUID。
 ; 你可以在 Inno Setup 編譯器的 "Tools" -> "Generate GUID" 中生成。
 AppId={{F2A4B6E0-1C3D-4B7A-9F2E-5A8D6F0C1B9A}}
 AppName=JuMouth TTS
-AppVersion=1.0.0
+AppVersion={#MyAppVersion}
 AppPublisher=Alaric113
 AppPublisherURL=https://github.com/Alaric113/tts-with-vb-cable
 AppSupportURL=https://github.com/Alaric113/tts-with-vb-cable/issues
@@ -23,7 +25,7 @@ DefaultGroupName=JuMouth TTS
 
 ; 輸出設定
 OutputDir=.\install
-OutputBaseFilename=JuMouth_v1.0.0_setup
+OutputBaseFilename=JuMouth_v{#MyAppVersion}_setup
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern

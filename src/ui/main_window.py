@@ -734,6 +734,9 @@ class MainWindow(QMainWindow):
         if self.overlay_layout.count() > 0:
             widget_to_remove = self.overlay_layout.takeAt(0).widget()
             if widget_to_remove:
+                # --- 核心修正: 在刪除前，檢查是否為模型管理視窗並清除參照 ---
+                if hasattr(widget_to_remove, 'title') and widget_to_remove.title == "模型管理":
+                    self.app.model_management_window = None
                 widget_to_remove.deleteLater()
         
         self.overlay_widget.hide()

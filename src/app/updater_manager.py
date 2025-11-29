@@ -55,25 +55,25 @@ class UpdateManager:
                 self.app.log_message(f"發現新版本: {latest_version_str} (當前版本: {APP_VERSION})", "INFO")
                 assets = latest_release.get('assets', [])
                 
-                # --- 核心修正: 尋找 JuMouth_update.zip 的下載連結 ---
-                zip_asset = next((a for a in assets if a['name'] == 'JuMouth_update.zip'), None)
+                # --- 核心修正: 尋找 manifest.json 的下載連結 ---
+                manifest_asset = next((a for a in assets if a['name'] == 'manifest.json'), None)
 
-                if zip_asset and 'browser_download_url' in zip_asset:
-                    zip_download_url = zip_asset['browser_download_url']
+                if manifest_asset and 'browser_download_url' in manifest_asset:
+                    manifest_download_url = manifest_asset['browser_download_url']
                     
                     def on_user_choice(do_update):
                         if do_update:
-                            self._launch_update_wizard(zip_download_url)
+                            self._launch_update_wizard(manifest_download_url)
 
                     self.app.show_messagebox(
                         "發現新版本",
-                        f"檢測到新版本 {latest_version_str}！ (您目前使用的是 {APP_VERSION})\n\n是否要立即自動下載並更新？\n\n(主程式將在下載完成後自動關閉並重啟)",
+                        f"檢測到新版本 {latest_version_str}！ (您目前使用的是 {APP_VERSION})\n\n此更新將只下載變動的檔案，過程通常很快。\n\n是否要立即自動下載並更新？\n(主程式將在下載完成後自動關閉並重啟)",
                         "yesno",
                         callback=on_user_choice
                     )
                 else:
-                    # 如果找不到 zip 檔，則退回手動更新
-                    self.app.log_message("在新版本中未找到 'JuMouth_update.zip'，引導使用者手動更新。", "WARN")
+                    # 如果找不到 manifest.json 檔，則退回手動更新
+                    self.app.log_message("在新版本中未找到 'manifest.json'，引導使用者手動更新。", "WARN")
                     self.app.show_messagebox("發現新版本", f"檢測到新版本 {latest_version_str}！\n\n但在發布中未找到自動更新包，請前往 GitHub 頁面手動下載。", "info")
                     webbrowser.open_new_tab(latest_release["html_url"])
 
