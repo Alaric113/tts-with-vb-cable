@@ -344,6 +344,36 @@ class LocalTTSPlayer(QObject):
             if current_engine in engine_list:
                 self.main_window.engine_combo.setCurrentText(current_engine)
 
+        self.all_voices_map = {}
+        if current_engine == ENGINE_EDGE:
+            for v in self.audio.get_all_edge_voices(): self.all_voices_map[v["ShortName"]] = v
+            for v in self.config.get("custom_voices", []): self.all_voices_map[v["name"]] = v
+        elif current_engine == ENGINE_PYTTX3:
+            for v in self.audio.get_voice_names(): self.all_voices_map[v] = {"name": v}
+        elif current_engine in self.get_sherpa_onnx_engines(): # Updated condition for Sherpa-ONNX models
+            # For Sherpa-ONNX engines, the engine itself is the "voice"
+            self.all_voices_map[current_engine] = {"name": current_engine}
+
+        # Handle backward compatibility for visible_voices
+        visible_voices_setting = self.config.get("visible_voices", {})
+        if isinstance(visible_voices_setting, dict):
+            visible_voices_config = visible_voices_setting.get(current_engine, [])
+        elif isinstance(visible_voices_setting, list):
+            visible_voices_config = visible_voices_setting  # Old format
+        else:
+            visible_voices_config = []
+            
+        visible_voices = [name for name in visible_voices_config if name in self.all_voices_map]
+        
+        # If no visible voices are configured, but there are voices available, select the first one.
+        if not visible_voices and self.all_voices_map:
+            # If current engine is a Sherpa-ONNX model, ensure it's in the visible voices.
+            if current_engine in self.get_sherpa_onnx_engines():
+                visible_voices.append(current_engine)
+            else:
+                default_voice_name = list(self.all_voices_map.keys())[0]
+                visible_voices.append(default_voice_name)
+
         self.main_window.voice_combo.clear()
         self.main_window.voice_combo.addItems(visible_voices)
 

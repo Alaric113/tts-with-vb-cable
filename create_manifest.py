@@ -1,7 +1,3 @@
-# -*- coding: utf-8 -*-
-# 檔案: create_manifest.py
-# 功用: 為應用程式建立一個用於部分更新的 manifest.json 檔案。
-
 import os
 import sys
 import json
@@ -9,7 +5,7 @@ import hashlib
 from pathlib import Path
 
 def calculate_sha256(file_path):
-    """計算檔案的 SHA256 雜湊值。"""
+    """Calculates the SHA256 hash of a file."""
     sha256 = hashlib.sha256()
     try:
         with open(file_path, "rb") as f:
@@ -17,61 +13,81 @@ def calculate_sha256(file_path):
                 sha256.update(byte_block)
         return sha256.hexdigest()
     except Exception as e:
-        print(f"錯誤: 無法計算檔案 {file_path} 的雜湊值: {e}")
+        print(f"Error: Could not calculate hash for {file_path}: {e}")
         return None
 
 def create_manifest(target_dir, version):
     """
-    掃描目標目錄，為所有檔案建立一個 manifest.json。
+    Scans the target directory and creates a manifest.json for all files.
 
-    :param target_dir: 要掃描的應用程式建置目錄。
-    :param version: 要寫入 manifest 的版本號。
+    :param target_dir: The application build directory to scan.
+    :param version: The version number to write into the manifest.
     """
     target_path = Path(target_dir)
     if not target_path.is_dir():
-        print(f"錯誤: 目標目錄 '{target_dir}' 不存在或不是一個目錄。")
+        print(f"Error: Target directory '{target_dir}' does not exist or is not a directory.")
         return
 
-    print(f"正在為版本 {version} 掃描目錄: {target_path.resolve()}")
+    print(f"Scanning directory for version {version}: {target_path.resolve()}")
 
     manifest_data = {
         "version": version,
         "files": {}
     }
 
-    files_to_process = [f for f in target_path.rglob('*') if f.is_file()]
+    files_to_process = []
+    # Manually walk the directory to control what gets added
+    for root, dirs, files in os.walk(target_path):
+        # Skip _internal directory
+        if Path(root).name == "_internal":
+            dirs[:] = [] # Don't recurse into _internal
+            continue
+        
+        for name in files:
+            file_path = Path(root) / name
+            files_to_process.append(file_path)
+
     total_files = len(files_to_process)
     
     for i, file_path in enumerate(files_to_process):
-        # 排除 manifest.json 本身和此腳本
+        # Exclude the manifest file itself and this script
         if file_path.name == "manifest.json" or file_path.name == "create_manifest.py":
             continue
 
         relative_path = file_path.relative_to(target_path).as_posix()
         
-        # 顯示進度
+        # Display progress
         progress = (i + 1) / total_files * 100
-        print(f"[{progress:6.2f}%] 正在處理: {relative_path}", end='\r')
+        print(f"[{progress:6.2f}%] Processing: {relative_path}", end='\r')
 
         file_hash = calculate_sha256(file_path)
         if file_hash:
             manifest_data["files"][relative_path] = file_hash
 
-    # 清除最後的進度列
+    # Clear the last progress line
     print(" " * 80, end='\r')
+
+    # Explicitly add _internal.zip to the manifest if it exists
+    internal_zip_path = target_path / "_internal.zip"
+    if internal_zip_path.exists():
+        internal_zip_relative_path = internal_zip_path.relative_to(target_path).as_posix()
+        internal_zip_hash = calculate_sha256(internal_zip_path)
+        if internal_zip_hash:
+            manifest_data["files"][internal_zip_relative_path] = internal_zip_hash
+            print(f"\nAdded _internal.zip to manifest: {internal_zip_relative_path}")
 
     output_path = target_path / "manifest.json"
     try:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(manifest_data, f, indent=4, ensure_ascii=False)
-        print(f"\n成功建立 manifest.json 檔案於: {output_path.resolve()}")
+        print(f"\nSuccessfully created manifest.json at: {output_path.resolve()}")
     except Exception as e:
-        print(f"\n錯誤: 無法寫入 manifest.json 檔案: {e}")
+        print(f"\nError: Could not write manifest.json: {e}")
 
 def main():
     if len(sys.argv) != 3:
-        print("用法: python create_manifest.py <目標目錄> <版本號>")
-        print("範例: python create_manifest.py ./dist/JuMouth v1.2.3")
+        print("Usage: python create_manifest.py <target_directory> <version_number>")
+        print("Example: python create_manifest.py ./dist/JuMouth v1.2.3")
         sys.exit(1)
 
     target_directory = sys.argv[1]

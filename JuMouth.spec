@@ -2,8 +2,7 @@
 
 import sys
 import os
-import sys
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules # Removed collect_binaries
 
 # --- 專案設定 ---
 APP_NAME = "JuMouth"
@@ -39,11 +38,38 @@ pyqt_excludes = [
     'Qt6.QtXml',
 ]
 
+# --- Locate .libs directories for numpy and scipy ---
+# This path construction assumes a standard Python installation structure
+# and is robust to virtual environments by using sys.prefix.
+site_packages_path = os.path.join(sys.prefix, 'Lib', 'site-packages')
+
+extra_binaries = []
+
+# For numpy
+numpy_libs_path = os.path.join(site_packages_path, 'numpy', '.libs')
+if os.path.isdir(numpy_libs_path):
+    # Add all files from numpy/.libs to the bundle under numpy/.libs
+    # The format is (source_path, dest_path_in_bundle)
+    extra_binaries.append((numpy_libs_path, 'numpy/.libs')) 
+    print(f"DEBUG: Added numpy .libs from: {numpy_libs_path}")
+else:
+    print(f"DEBUG: numpy .libs not found at: {numpy_libs_path}")
+
+# For scipy
+scipy_libs_path = os.path.join(site_packages_path, 'scipy', '.libs')
+if os.path.isdir(scipy_libs_path):
+    # Add all files from scipy/.libs to the bundle under scipy/.libs
+    extra_binaries.append((scipy_libs_path, 'scipy/.libs'))
+    print(f"DEBUG: Added scipy .libs from: {scipy_libs_path}")
+else:
+    print(f"DEBUG: scipy .libs not found at: {scipy_libs_path}")
+
+
 # --- 主要應用程式的分析 (JuMouth.exe) ---
 a = Analysis(
     [MAIN_SCRIPT],
     pathex=[base_path, src_path],
-    binaries=[],
+    binaries=extra_binaries, # Use the dynamically collected binaries
     datas=[
         # 包含圖示檔案
         (ICON_FILE, '.'),
@@ -71,10 +97,15 @@ a = Analysis(
         'packaging.version',
         'packaging.specifiers',
         'packaging.requirements',
+        # --- NEW: More specific hidden imports based on traceback ---
+        'scipy.linalg.blas',
+        'numpy.core._multiarray_umath',
+        *collect_submodules('numpy'),
+        *collect_submodules('scipy'),
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[], # 確保沒有使用 runtime_hook
+    runtime_hooks=[],
     excludes=pyqt_excludes, # --- 輕量化方案: 排除不必要的 PyQt6 模組 ---
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
