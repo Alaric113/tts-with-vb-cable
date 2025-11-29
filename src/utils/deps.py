@@ -43,7 +43,7 @@ CACHE_DIR = os.path.join(BASE_DIR, "audio_cache")
 TTS_MODELS_DIR = os.path.join(BASE_DIR, "tts_models")
 
 # --- 應用程式版本與更新資訊 ---
-APP_VERSION = "1.2.6"  # 您可以根據您的版本進度修改此處
+APP_VERSION = "1.2.7"  # 您可以根據您的版本進度修改此處
 GITHUB_REPO = "Alaric113/tts-with-vb-cable" # !! 請務必將 YOUR_USERNAME 替換成您的 GitHub 使用者名稱 !!
 
 CABLE_OUTPUT_HINT = "CABLE Input"
@@ -261,15 +261,25 @@ def extract_tar_bz2(tar_path: str, target_dir: str, progress_cb=None, log_cb=Non
     if progress_cb:
         progress_cb(1.0, "模型解壓縮完成。")
 
-def check_model_downloaded(model_id: str) -> bool:
+def check_model_downloaded(model_id: str, log_cb=None) -> bool:
     if model_id not in PREDEFINED_MODELS:
+        if log_cb: log_cb(f"Check failed for {model_id}: Not in PREDEFINED_MODELS.", "DEBUG")
         return False
     model_config = PREDEFINED_MODELS[model_id]
     model_dir = Path(TTS_MODELS_DIR) / model_id
     if not model_dir.exists():
+        if log_cb: log_cb(f"Check failed for {model_id}: Directory {model_dir} does not exist.", "DEBUG")
         return False
-    required_files = [model_dir / fname for fname in model_config["file_names"]]
-    return all(f.exists() for f in required_files)
+    
+    all_found = True
+    for fname in model_config["file_names"]:
+        f_path = model_dir / fname
+        if not f_path.exists():
+            if log_cb: log_cb(f"Check failed for {model_id}: File {f_path} does not exist.", "DEBUG")
+            all_found = False
+            # We could break here, but logging all missing files might be useful
+    
+    return all_found
 
 def delete_model(model_id: str, log_cb=None):
     if model_id not in PREDEFINED_MODELS:

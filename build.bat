@@ -27,45 +27,74 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-REM --- NEW: Assemble the final directory structure ---
-echo [ASSEMBLE] Assembling final application structure...
-set MAIN_APP_DIR="dist\JuMouth"
-set WIZARD_DIR="dist\update_wizard"
-set INTERNAL_DIR_PARENT="%MAIN_APP_DIR%\"
-set INTERNAL_DIR="%MAIN_APP_DIR%\_internal"
-set FINAL_WIZARD_PATH="%INTERNAL_DIR%\update_wizard"
+REM --- 4. Build installer with Inno Setup (Moved Up) ---
+echo [INSTALLER] Creating Windows installer...
 
-if not exist %WIZARD_DIR% (
-    echo [ERROR] PyInstaller did not create the update_wizard directory.
+setlocal enabledelayedexpansion
+
+set "ISCC_PATH=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+if not exist "!ISCC_PATH!" set "ISCC_PATH=C:\Program Files\Inno Setup 6\ISCC.exe"
+
+if not defined ISCC_PATH (
+    echo [WARN] Inno Setup compiler (ISCC.exe) not found.
+    echo        Please install Inno Setup.
+    echo [WARN] Skipping installer creation.
+    goto :skip_installer
+)
+
+echo [INFO] Using Inno Setup compiler: "!ISCC_PATH!"
+"!ISCC_PATH!" "JuMouth_setup.iss" /DAppVersion=%APP_VERSION%
+if !errorlevel! neq 0 (
+    echo [ERROR] Failed to create installer!
     pause
     exit /b 1
 )
+echo [INSTALLER] Installer created successfully.
 
-echo [ASSEMBLE] Creating _internal directory.
-mkdir %INTERNAL_DIR%
-echo [ASSEMBLE] Moving update_wizard into _internal.
-move %WIZARD_DIR% %INTERNAL_DIR%
+endlocal
+
+:skip_installer
+
+REM --- 5. Assemble the final directory structure for GitHub Release ---
+echo [ASSEMBLE] Assembling final application structure for release...
+set "MAIN_APP_DIR=dist\JuMouth"
+set "WIZARD_DIR=dist\update_wizard"
+set "INTERNAL_DIR=%MAIN_APP_DIR%_internal"
+
+if not exist "%WIZARD_DIR%" (
+    echo [WARN] update_wizard directory not found, skipping assembly for release.
+    goto :skip_assembly
+)
+
+if not exist "%INTERNAL_DIR%" mkdir "%INTERNAL_DIR%"
+move "%WIZARD_DIR%" "%INTERNAL_DIR%"
 echo [ASSEMBLE] Final structure assembled successfully.
+
+REM --- Add a delay to prevent "Access Denied" errors ---
+echo [INFO] Waiting for file handles to be released...
+timeout /t 2 /nobreak > NUL
 
 REM --- Zip _internal folder ---
 echo [ZIP] Zipping _internal folder for GitHub Release...
-set INTERNAL_DIR_TO_ZIP="dist\JuMouth\_internal"
-set INTERNAL_ZIP="dist\JuMouth\_internal.zip"
+set "INTERNAL_DIR_TO_ZIP=%MAIN_APP_DIR%_internal"
+set "INTERNAL_ZIP=%MAIN_APP_DIR%_internal.zip"
 
-if exist %INTERNAL_DIR_TO_ZIP% (
+if exist "%INTERNAL_DIR_TO_ZIP%" (
     powershell -command "Compress-Archive -Path '%INTERNAL_DIR_TO_ZIP%\*' -DestinationPath '%INTERNAL_ZIP%'"
     if %errorlevel% neq 0 (
-        echo [ERROR] Failed to create _internal.zip!
+        echo [ERROR] Failed to create _internal.zip! Check for powershell errors above.
         pause
         exit /b 1
     )
-    rmdir /s /q %INTERNAL_DIR_TO_ZIP%
+    rmdir /s /q "%INTERNAL_DIR_TO_ZIP%"
     echo [ZIP] _internal.zip created and _internal folder removed.
 ) else (
-    echo [ZIP] _internal folder not found, skipping zipping.
+    echo [WARN] _internal folder not found, skipping zipping.
 )
 
-REM --- 4. Create manifest.json ---
+:skip_assembly
+
+REM --- 6. Create manifest.json ---
 echo [MANIFEST] Creating manifest.json for partial updates...
 python create_manifest.py "dist\JuMouth" "%APP_VERSION%"
 if %errorlevel% neq 0 (
@@ -75,32 +104,6 @@ if %errorlevel% neq 0 (
 )
 echo [MANIFEST] manifest.json created successfully.
 
-REM --- 5. Build installer with Inno Setup ---
-echo [INSTALLER] Creating Windows installer...
-
-REM Check for Inno Setup compiler in standard locations
-set "ISCC_PATH="
-if exist "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" set "ISCC_PATH=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-if exist "C:\Program Files\Inno Setup 6\ISCC.exe" set "ISCC_PATH=C:\Program Files\Inno Setup 6\ISCC.exe"
-
-if not defined ISCC_PATH (
-    echo [WARN] Inno Setup compiler (ISCC.exe) not found.
-    echo        Please install Inno Setup or add its path to the build script.
-    echo [WARN] Skipping installer creation.
-    goto :skip_installer
-)
-
-echo [INFO] Using Inno Setup compiler: "%ISCC_PATH%"
-REM Pass version number to Inno Setup script using /D
-"%ISCC_PATH%" "JuMouth_setup.iss" /DAppVersion=%APP_VERSION%
-if %errorlevel% neq 0 (
-    echo [ERROR] Failed to create installer!
-    pause
-    exit /b 1
-)
-echo [INSTALLER] Installer created successfully.
-
-:skip_installer
 
 echo.
 echo [SUCCESS] All tasks completed successfully!

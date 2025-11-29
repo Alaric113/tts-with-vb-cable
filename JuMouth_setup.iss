@@ -51,7 +51,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; DestDir 指定了它們將被安裝到使用者選擇的路徑 ({app})。
 ; Flags: recursesubdirs 表示遞迴包含所有子目錄； createallsubdirs 表示在目標位置創建所有子目錄。
 Source: "dist\JuMouth\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "vc_redist.x64.exe"; DestDir: {tmp}; Flags: deleteafterinstall
+Source: "dist\update_wizard\*"; DestDir: "{app}\_internal\update_wizard"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; 注意：請確保在執行此腳本前，你已經運行了 `pyinstaller JuMouth.spec`
 ; 並且 `dist\JuMouth` 資料夾已經存在。
@@ -65,30 +65,9 @@ Name: "{group}\{cm:UninstallProgram,JuMouth TTS}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\JuMouth TTS"; Filename: "{app}\JuMouth.exe"; Tasks: desktopicon
 
 [Run]
-; 安裝完成後，先安裝 VC++ Redistributable，然後再提供選項讓使用者立即執行應用程式。
-Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ Redistributable..."; Check: VCRedistNeedsInstall
+; 安裝完成後，提供一個選項讓使用者立即執行應用程式。
 Filename: "{app}\JuMouth.exe"; Description: "{cm:LaunchProgram,JuMouth TTS}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 ; 解除安裝時，刪除整個應用程式目錄，包括使用者產生的 config.json 和 ffmpeg。
 Type: filesandordirs; Name: "{app}"
-
-[Code]
-function VCRedistNeedsInstall: Boolean;
-var
-    Installed: DWord;
-begin
-    // This checks for the 64-bit VC++ 2015-2022 redistributable registry key.
-    // The '14.0' key is used for the whole 2015-2022 series.
-    // We check the 64-bit view of the registry.
-    if RegQueryDWordValue(HKLM64, 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64', 'Installed', Installed) then
-    begin
-        // If the key exists and its value is 1, it is installed.
-        Result := (Installed <> 1);
-    end
-    else
-    begin
-        // If the key doesn't exist, it needs to be installed.
-        Result := True;
-    end;
-end;

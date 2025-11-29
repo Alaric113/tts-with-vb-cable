@@ -100,12 +100,10 @@ a = Analysis(
         # --- NEW: More specific hidden imports based on traceback ---
         'scipy.linalg.blas',
         'numpy.core._multiarray_umath',
-        *collect_submodules('numpy'),
-        *collect_submodules('scipy'),
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['src/runtime_hook.py'],
     excludes=pyqt_excludes, # --- 輕量化方案: 排除不必要的 PyQt6 模組 ---
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -153,10 +151,10 @@ main_exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # 設定為 False 以隱藏主控台視窗
+    console=False,  # 設定為 True 以顯示主控台視窗進行除錯
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -174,7 +172,7 @@ wizard_exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False, # 更新精靈也是 GUI，隱藏主控台
@@ -193,7 +191,7 @@ coll_main = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name=APP_NAME,
 )
@@ -205,7 +203,7 @@ coll_wizard = COLLECT(
     b.zipfiles,
     b.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name='update_wizard'
 )

@@ -11,7 +11,8 @@ import sys
 import threading
 import collections
 import ctypes
-
+import shutil
+from pathlib import Path
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import pyqtSignal, QObject, QTimer, Qt
 from PyQt6.QtGui import QKeySequence, QShortcut
@@ -252,6 +253,33 @@ class LocalTTSPlayer(QObject):
 
     # ===================== 依賴流程 =====================
     def _dependency_flow_thread(self):
+        # --- NEW: Unzip internal components on first run ---
+        try:
+            # sys.executable is the path to JuMouth.exe
+            # Use getattr to be safe in non-frozen environments
+            if getattr(sys, 'frozen', False):
+                app_dir = Path(sys.executable).parent
+                internal_zip = app_dir / "_internal.zip"
+                internal_dir = app_dir / "_internal"
+
+                if internal_zip.exists():
+                    self.log_message("第一次啟動，正在解壓縮內部元件...", "INFO")
+                    # Clean up old directory if it exists, to ensure a fresh extraction
+                    if internal_dir.exists():
+                        shutil.rmtree(internal_dir)
+                    
+                    # Unzip the archive to the application's root directory
+                    shutil.unpack_archive(internal_zip, app_dir)
+                    
+                    # Clean up the zip file
+                    os.remove(internal_zip)
+                    self.log_message("內部元件解壓縮完成。", "INFO")
+        except Exception as e:
+            self.log_message(f"解壓縮內部元件時發生錯誤: {e}", "ERROR")
+            self.show_messagebox("嚴重錯誤", f"無法設定應用程式的必要元件: {e}", "error")
+            return
+        # --- END NEW ---
+
         if IS_WINDOWS and comtypes_installed:
             pythoncom.CoInitializeEx(0)
 
@@ -325,69 +353,27 @@ class LocalTTSPlayer(QObject):
     def _update_ui_after_load(self, new_engine_id=""):
         self._ui_loading = True
 
-        current_engine = new_engine_id if new_engine_id else self.config.get("engine", ENGINE_PYTTX3)
-        self.log_message(f"DEBUG: _update_ui_after_load: current_engine from config or new download: {current_engine}", "DEBUG")
-        # Repopulate engine combo box
-        engine_list = [
-            self.ENGINE_EDGE,
-            self.ENGINE_PYTTX3,
-            self.ENGINE_CHAT_TTS
-        ] + self.get_sherpa_onnx_engines()
-        self.log_message(f"DEBUG: _update_ui_after_load: Repopulating engine_combo with: {engine_list}", "DEBUG")
-        # Ensure engine_combo exists before trying to clear/add items
+        engine_list = self.get_sherpa_onnx_engines()
+        
+        # Determine the current engine
+        current_engine = new_engine_id if new_engine_id and new_engine_id in engine_list else self.config.get("engine")
+        if not current_engine or current_engine not in engine_list:
+            current_engine = engine_list[0] if engine_list else None
+        
+        self.log_message(f"DEBUG: _update_ui_after_load: Updating UI. Engine list: {engine_list}. Current engine: {current_engine}", "DEBUG")
+
+        # Repopulate and set engine combo box
         if hasattr(self.main_window, 'engine_combo'):
             self.main_window.engine_combo.clear()
-            self.main_window.engine_combo.addItems(engine_list)
-            self.log_message(f"DEBUG: _update_ui_after_load: engine_combo current text after repopulating: {self.main_window.engine_combo.currentText()}", "DEBUG")
-            
-            # Now set the current text after items have been added
-            if current_engine in engine_list:
+            if engine_list:
+                self.main_window.engine_combo.addItems(engine_list)
                 self.main_window.engine_combo.setCurrentText(current_engine)
-
-        self.all_voices_map = {}
-        if current_engine == ENGINE_EDGE:
-            for v in self.audio.get_all_edge_voices(): self.all_voices_map[v["ShortName"]] = v
-            for v in self.config.get("custom_voices", []): self.all_voices_map[v["name"]] = v
-        elif current_engine == ENGINE_PYTTX3:
-            for v in self.audio.get_voice_names(): self.all_voices_map[v] = {"name": v}
-        elif current_engine in self.get_sherpa_onnx_engines(): # Updated condition for Sherpa-ONNX models
-            # For Sherpa-ONNX engines, the engine itself is the "voice"
-            self.all_voices_map[current_engine] = {"name": current_engine}
-
-        # Handle backward compatibility for visible_voices
-        visible_voices_setting = self.config.get("visible_voices", {})
-        if isinstance(visible_voices_setting, dict):
-            visible_voices_config = visible_voices_setting.get(current_engine, [])
-        elif isinstance(visible_voices_setting, list):
-            visible_voices_config = visible_voices_setting  # Old format
-        else:
-            visible_voices_config = []
-            
-        visible_voices = [name for name in visible_voices_config if name in self.all_voices_map]
         
-        # If no visible voices are configured, but there are voices available, select the first one.
-        if not visible_voices and self.all_voices_map:
-            # If current engine is a Sherpa-ONNX model, ensure it's in the visible voices.
-            if current_engine in self.get_sherpa_onnx_engines():
-                visible_voices.append(current_engine)
-            else:
-                default_voice_name = list(self.all_voices_map.keys())[0]
-                visible_voices.append(default_voice_name)
+        # Fallback if the saved engine isn't downloaded
+        if self.main_window.engine_combo.currentIndex() == -1 and engine_list:
+            self.main_window.engine_combo.setCurrentText(engine_list[0])
 
-        self.main_window.voice_combo.clear()
-        self.main_window.voice_combo.addItems(visible_voices)
-
-        current_selection = self.config.get("voice")
-        if current_selection in visible_voices:
-            self.main_window.voice_combo.setCurrentText(current_selection)
-        elif visible_voices:
-            self.main_window.voice_combo.setCurrentText(visible_voices[0])
-
-        # Enable/disable voice combo based on engine type
-        self.main_window.voice_combo.setEnabled(current_engine not in self.get_sherpa_onnx_engines())
-
-        self.log_message(f"DEBUG: _update_ui_after_load: Audio TTS Rate: {self.audio.tts_rate}, Audio TTS Volume: {self.audio.tts_volume}", "DEBUG")
-        
+        # Other UI elements
         devnames = self.audio.get_output_device_names()
         self.main_window.local_device_combo.clear()
         self.main_window.local_device_combo.addItems(devnames)
@@ -400,8 +386,111 @@ class LocalTTSPlayer(QObject):
             self._early_log_queue.clear()
         
         self._ui_loading = False
-        self._on_engine_change(current_engine) # Apply engine specific UI settings
-        self.update_tts_settings()
+        
+        # Trigger the change logic for the selected engine
+        self._on_engine_change(self.main_window.engine_combo.currentText())
+
+    def _on_engine_change(self, val):
+        if self._ui_loading or not val: return
+        
+        self.audio.set_engine(val)
+        self.log_message(f"切換引擎: {self.audio.current_engine}")
+
+        # Set UI properties for Sherpa-ONNX models
+        self.main_window.pitch_slider.setEnabled(False)
+        self.main_window.pitch_value_label.setText("N/A")
+        self.main_window.speed_slider.setRange(0, 20) # 0.0 to 2.0
+        
+        self.config.set("engine", val)
+        # This will trigger on_voice_change, which handles loading speakers and settings
+        self.on_voice_change(None)
+
+    def on_voice_change(self, choice):
+        if self._ui_loading and choice is not None: return
+
+        model_id = self.audio.current_engine
+        if not model_id: return
+
+        # Load model if it's not already loaded
+        if self.audio.sherpa_model_id != model_id:
+            self.log_message(f"嘗試載入 Sherpa-ONNX 模型: {model_id}", "INFO")
+            if not self.audio._load_sherpa_onnx_voice(model_id):
+                self.show_messagebox("錯誤", f"載入 Sherpa-ONNX 模型 '{model_id}' 失敗。", "error")
+                # Handle fallback if needed, e.g., switch to another model
+                return
+        
+        # Populate speaker list and set selection
+        combo = self.main_window.voice_combo
+        combo.blockSignals(True)
+        try:
+            speakers = self.audio.get_voice_names()
+            combo.clear()
+            combo.addItems(speakers)
+
+            if len(speakers) > 1:
+                combo.setEnabled(True)
+                # If a choice was passed (user clicked), use it. Otherwise, load from config.
+                if choice and choice in speakers:
+                    current_speaker = choice
+                else:
+                    speaker_id = self.config.get_model_setting(model_id, "speaker_id", 0)
+                    current_speaker = f"Speaker {speaker_id}"
+                
+                if current_speaker in speakers:
+                    combo.setCurrentText(current_speaker)
+                elif speakers:
+                    combo.setCurrentText(speakers[0])
+            else:
+                # single-speaker model
+                combo.setEnabled(False)
+        finally:
+            combo.blockSignals(False)
+
+        # Update audio engine and config with the final selection
+        final_speaker_choice = combo.currentText()
+        if not final_speaker_choice: return
+
+        self.log_message(f"講者設定為: {final_speaker_choice}")
+        try:
+            speaker_id = int(final_speaker_choice.split(" ")[-1])
+            self.audio.sherpa_speaker_id = speaker_id
+            self.config.set_model_setting(model_id, "speaker_id", speaker_id)
+        except (ValueError, IndexError):
+            self.log_message(f"無法從 '{final_speaker_choice}' 解析講者 ID", "WARN")
+        
+        # Update settings sliders for the selected model
+        self.update_tts_settings(force_load=True)
+
+    def _on_local_device_change(self, device_name):
+        if self._ui_loading or not device_name: return
+        self.audio.local_output_device_name = device_name
+        self.log_message(f"主輸出設備已變更為: {device_name}")
+        self.config.set("local_output_device_name", device_name)
+
+    def update_tts_settings(self, _=None, force_load=False):
+        if self._ui_loading: return
+
+        model_id = self.audio.current_engine
+        if not model_id: return
+
+        # On a forced load, we read from config and update the UI
+        if force_load:
+            rate = self.config.get_model_setting(model_id, "rate", 1.0)
+            volume = self.config.get_model_setting(model_id, "volume", 1.0)
+            self.main_window.speed_slider.setValue(int(rate * 10))
+            self.main_window.volume_slider.setValue(int(volume * 100))
+            return
+
+        # Normal operation: read from UI and save to config
+        rate = self.main_window.speed_slider.value() / 10.0
+        volume = round(self.main_window.volume_slider.value() / 100.0, 2)
+        
+        self.audio.set_rate_volume(rate, volume)
+        self.main_window.speed_value_label.setText(f"{rate:.1f}")
+        self.main_window.volume_value_label.setText(f"{volume:.2f}")
+        
+        self.config.set_model_setting(model_id, "rate", rate)
+        self.config.set_model_setting(model_id, "volume", volume)
 
     def _process_audio_status_queue(self):
         try:
@@ -785,180 +874,6 @@ class LocalTTSPlayer(QObject):
         self.main_window.log_text.setVisible(is_expanded)
         self.main_window.log_toggle_button.setText("▼" if is_expanded else "▲")
 
-    # ===================== 其它事件 =====================
-    def _on_engine_change(self, val):
-        if self._ui_loading: return
-        
-        self.audio.set_engine(val)
-        self.log_message(f"切換引擎: {self.audio.current_engine}")
-
-        # Re-init engine if necessary and handle UI changes
-        if val in self.get_sherpa_onnx_engines(): # Updated condition for Sherpa-ONNX models
-            if not self.audio._init_sherpa_onnx_runtime():
-                self.show_messagebox("錯誤", "Sherpa-ONNX 引擎初始化失敗。\n請檢查 'sherpa-onnx' 模組是否正確安裝。", "error")
-                self.main_window.engine_combo.setCurrentText(ENGINE_PYTTX3) # This will re-trigger _on_engine_change
-                return
-            self.main_window.pitch_slider.setEnabled(False)
-            self.main_window.speed_slider.setRange(0, 20) # 0.0 to 2.0 (0-20 mapped to slider)
-            self.main_window.speed_slider.setValue(int(self.audio.tts_rate * 10)) # Apply loaded rate
-            self.main_window.volume_slider.setValue(int(self.audio.tts_volume * 100)) # Apply loaded volume
-            self.log_message(f"DEBUG: _on_engine_change (Sherpa-ONNX): Applied Rate={self.audio.tts_rate}, Volume={self.audio.tts_volume} to sliders", "DEBUG")
-        elif val == ENGINE_EDGE:
-            self.main_window.pitch_slider.setEnabled(True)
-            self.main_window.speed_slider.setRange(100, 250)
-            self.main_window.speed_slider.setValue(self.audio.tts_rate)
-            self.main_window.volume_slider.setValue(int(self.audio.tts_volume * 100))
-            self.log_message(f"DEBUG: _on_engine_change (Edge): Applied Rate={self.audio.tts_rate}, Volume={self.audio.tts_volume} to sliders", "DEBUG")
-        elif val == ENGINE_PYTTX3:
-            self.main_window.pitch_slider.setEnabled(False)
-            self.main_window.speed_slider.setRange(100, 250)
-            self.main_window.speed_slider.setValue(self.audio.tts_rate)
-            self.main_window.volume_slider.setValue(int(self.audio.tts_volume * 100))
-            self.log_message(f"DEBUG: _on_engine_change (pyttsx3): Applied Rate={self.audio.tts_rate}, Volume={self.audio.tts_volume} to sliders", "DEBUG")
-        elif val == ENGINE_CHAT_TTS:
-            self.show_messagebox("提示", "ChatTTS 是一個實驗性選項，資源需求高且可能不穩定。\n目前尚未在此版本中完全實作。", "warning")
-            # Fallback to the first Sherpa-ONNX engine if possible, otherwise pyttsx3
-            if self.get_sherpa_onnx_engines():
-                self.main_window.engine_combo.setCurrentText(self.get_sherpa_onnx_engines()[0])
-            else:
-                self.main_window.engine_combo.setCurrentText(ENGINE_PYTTX3)
-            return
-
-        # Update voice list
-        combo = self.main_window.voice_combo
-        combo.blockSignals(True)
-        try:
-            # If it's a Sherpa-ONNX engine, the voice combo should be disabled and show the engine itself
-            if val in self.get_sherpa_onnx_engines():
-                values = [val] # The engine itself is the "voice"
-                combo.setEnabled(False)
-            else:
-                values = self.audio.get_voice_names()
-                combo.setEnabled(True)
-
-            combo.clear()
-            combo.addItems(values)
-            
-            # Try to set previous voice, otherwise first available
-            previous_voice = self.config.get("voice")
-            if previous_voice in values:
-                combo.setCurrentText(previous_voice)
-            elif values:
-                combo.setCurrentText(values[0])
-        finally:
-            combo.blockSignals(False)
-        
-        self.config.set("engine", val)
-        self.on_voice_change(combo.currentText())
-
-    def on_voice_change(self, choice):
-        if not choice or self._ui_loading: return
-        
-        # Part 1: Set the voice in the audio engine, which for Sherpa involves loading the model
-        if self.audio.current_engine in self.get_sherpa_onnx_engines():
-            model_id = self.audio.current_engine
-            if self.audio.sherpa_model_id != model_id:
-                self.log_message(f"嘗試載入 Sherpa-ONNX 模型: {model_id}", "INFO")
-                if not self.audio._load_sherpa_onnx_voice(model_id):
-                    self.show_messagebox("錯誤", f"載入 Sherpa-ONNX 模型 '{model_id}' 失敗。\n請檢查該模型檔案是否完整。", "error")
-                    self.main_window.engine_combo.setCurrentText(ENGINE_PYTTX3) 
-                    return
-            self.audio.set_current_voice(model_id) # Set voice after successful load
-        elif self.audio.current_engine == ENGINE_PYTTX3:
-            self.audio.set_pyttsx3_voice_by_name(choice)
-        else: # Edge
-            self.audio.set_current_voice(choice)
-
-        self.config.set("voice", choice)
-        self.log_message(f"當前語音已設定為: {choice}")
-
-        # Part 2: Load settings for the new voice/model and update UI
-        if self.audio.current_engine in self.get_sherpa_onnx_engines():
-            # For Sherpa, the settings are already loaded into self.audio by _load_sherpa_onnx_voice.
-            # We just need to update the UI from self.audio.
-            rate = self.audio.tts_rate
-            volume = self.audio.tts_volume
-            self.main_window.speed_slider.setValue(int(rate * 10))
-            self.main_window.volume_slider.setValue(int(volume * 100))
-            self.main_window.speed_value_label.setText(f"{rate:.1f}")
-            self.main_window.volume_value_label.setText(f"{volume:.2f}")
-            self.main_window.pitch_value_label.setText("N/A")
-            self.log_message(f"DEBUG: Loaded settings for Sherpa model '{choice}': Rate={rate}, Vol={volume}", "DEBUG")
-        else:
-            # For other engines, we load settings from config based on voice name.
-            default_rate = self.config.get("rate", 175)
-            default_volume = self.config.get("volume", 1.0)
-            default_pitch = self.config.get("pitch", 0)
-
-            rate = self.config.get_model_setting(choice, "rate", default_rate)
-            volume = self.config.get_model_setting(choice, "volume", default_volume)
-            pitch = self.config.get_model_setting(choice, "pitch", default_pitch)
-
-            self.audio.set_rate_volume(rate, volume)
-            self.audio.tts_pitch = pitch
-
-            self.main_window.speed_slider.setValue(rate)
-            self.main_window.volume_slider.setValue(int(volume * 100))
-            self.main_window.pitch_slider.setValue(pitch)
-            self.main_window.speed_value_label.setText(f"{rate}")
-            self.main_window.volume_value_label.setText(f"{volume:.2f}")
-            self.main_window.pitch_value_label.setText(f"{pitch}")
-            self.log_message(f"DEBUG: Loaded settings for voice '{choice}': Rate={rate}, Vol={volume}, Pitch={pitch}", "DEBUG")
-
-    def _on_local_device_change(self, device_name):
-        if self._ui_loading or not device_name: return
-        self.audio.local_output_device_name = device_name
-        self.log_message(f"主輸出設備已變更為: {device_name}")
-        self.config.set("local_output_device_name", device_name)
-
-    def update_tts_settings(self, _=None):
-        if self._ui_loading: return
-
-        self.log_message(f"DEBUG: update_tts_settings: UI Loading state: {self._ui_loading}", "DEBUG")
-        current_speed_slider_value = self.main_window.speed_slider.value()
-        current_volume_slider_value = self.main_window.volume_slider.value()
-        self.log_message(f"DEBUG: update_tts_settings: Slider values - Speed: {current_speed_slider_value}, Volume: {current_volume_slider_value}", "DEBUG")
-
-
-        if self.audio.current_engine in self.get_sherpa_onnx_engines():
-            rate = current_speed_slider_value / 10.0
-            volume = round(current_volume_slider_value / 100.0, 2)
-            self.audio.set_rate_volume(rate, volume)
-            self.main_window.speed_value_label.setText(f"{rate:.1f}")
-            # Pitch is not applicable for Sherpa-ONNX, so reflect that in UI
-            self.main_window.pitch_value_label.setText("N/A")
-            self.audio.tts_pitch = 0 # Ensure pitch is reset or set to a neutral value
-            
-            # NEW: Save per-model rate and volume
-            self.config.set_model_setting(self.audio.current_engine, "rate", rate)
-            self.config.set_model_setting(self.audio.current_engine, "volume", volume)
-            self.log_message(f"DEBUG: update_tts_settings (Sherpa-ONNX): Saved Rate={rate}, Volume={volume} for model '{self.audio.current_engine}'", "DEBUG")
-        else:
-            rate = current_speed_slider_value
-            volume = round(current_volume_slider_value / 100.0, 2)
-            pitch = self.main_window.pitch_slider.value()
-
-            self.audio.set_rate_volume(rate, volume)
-            self.audio.tts_pitch = pitch
-            
-            self.main_window.speed_value_label.setText(f"{rate}")
-            self.main_window.pitch_value_label.setText(f"{pitch}")
-
-            # Use current_voice as the key for model settings
-            voice_id = self.audio.current_voice
-            if voice_id:
-                self.config.set_model_setting(voice_id, "rate", rate)
-                self.config.set_model_setting(voice_id, "volume", volume)
-                self.config.set_model_setting(voice_id, "pitch", pitch)
-                self.log_message(f"DEBUG: update_tts_settings (Other): Saved Rate={rate}, Volume={volume}, Pitch={pitch} for voice '{voice_id}'", "DEBUG")
-            else: # Fallback to global if no voice is selected
-                self.config.set("rate", rate)
-                self.config.set("volume", volume)
-                self.config.set("pitch", pitch)
-                self.log_message(f"DEBUG: update_tts_settings (Other): Saved Rate={rate}, Volume={volume}, Pitch={pitch} globally", "DEBUG")
-
-        self.main_window.volume_value_label.setText(f"{self.audio.tts_volume:.2f}")
-
     def on_closing(self):
         if self.hotkey_listener:
             try: self.hotkey_listener.stop() 
@@ -971,3 +886,8 @@ class LocalTTSPlayer(QObject):
     # --- Stubs for methods not fully shown ---
     def on_global_focus_changed(self, old, new): pass
     def handle_quick_input_history(self, entry, key): pass
+
+
+    def _on_model_download_progress(self, model_id: str, progress: float, status_text: str):
+        if self.model_management_window:
+            self.model_management_window.update_download_progress(model_id, progress, status_text)

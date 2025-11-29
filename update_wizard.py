@@ -227,40 +227,6 @@ class UpdateWizard:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         
         self._log(f"下載 {os.path.basename(relative_path)}...", "DEBUG")
-        
-        # --- NEW: Special handling for _internal.zip ---
-        if relative_path == "_internal.zip":
-            temp_zip_path = self.app_dir / "_temp_internal.zip"
-            try:
-                self._log(f"Downloading _internal.zip to temporary path: {temp_zip_path}", "DEBUG")
-                with requests.get(download_url, stream=True, timeout=30) as r:
-                    r.raise_for_status()
-                    with open(temp_zip_path, 'wb') as f:
-                        for chunk in r.iter_content(chunk_size=8192):
-                            f.write(chunk)
-                
-                # Extract the zip file
-                extract_dir = self.app_dir / "_internal"
-                if extract_dir.exists():
-                    self._log(f"Clearing existing _internal directory: {extract_dir}", "DEBUG")
-                    shutil.rmtree(extract_dir) # Clear old _internal content
-                os.makedirs(extract_dir)
-                
-                self._log(f"Extracting _internal.zip to {extract_dir}", "DEBUG")
-                import zipfile # Ensure zipfile is imported inside the function scope if it's not global
-                with zipfile.ZipFile(temp_zip_path, 'r') as zf:
-                    zf.extractall(extract_dir)
-                self._log(f"Extracted _internal.zip to {extract_dir}", "DEBUG")
-            except Exception as e:
-                self._log(f"Error handling _internal.zip: {e}", "ERROR")
-                raise # Re-raise error, let main loop catch it
-            finally:
-                if temp_zip_path.exists():
-                    self._log(f"Removing temporary _internal.zip: {temp_zip_path}", "DEBUG")
-                    os.remove(temp_zip_path)
-            return # Extraction handled, no need to proceed with normal file replacement
-        # --- End NEW section ---
-
         try:
             with requests.get(download_url, stream=True, timeout=30) as r:
                 r.raise_for_status()

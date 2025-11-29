@@ -525,11 +525,7 @@ class MainWindow(QMainWindow):
         sel_layout.setSpacing(10)
         sel_layout.addWidget(QLabel("TTS 引擎:"))
         self.engine_combo = QComboBox()
-        engine_list = [
-            self.app.ENGINE_EDGE,
-            self.app.ENGINE_PYTTX3,
-            self.app.ENGINE_CHAT_TTS
-        ] + self.app.get_sherpa_onnx_engines()
+        engine_list = self.app.get_sherpa_onnx_engines()
         self.engine_combo.addItems(engine_list)
         self.engine_combo.setCurrentText(self.app.audio.current_engine)
         self.engine_combo.currentTextChanged.connect(self.app._on_engine_change)

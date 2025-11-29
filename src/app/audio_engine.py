@@ -380,11 +380,28 @@ class AudioEngine:
     # ---------- 取得資訊 ----------
     def get_voice_names(self):
         if self.current_engine == ENGINE_EDGE:
-            return [DEFAULT_EDGE_VOICE] + [v["ShortName"] for v in self._edge_voices]
+            # For Edge, combine predefined voices with custom voices from config
+            custom_voices = self.app_controller.config.get("custom_voices", [])
+            visible_voices_config = self.app_controller.config.get("visible_voices", [])
+            
+            all_voices = [v["ShortName"] for v in self._edge_voices] + [v["name"] for v in custom_voices]
+            
+            # Filter voices based on visibility config if it's not empty
+            if visible_voices_config:
+                return [v for v in all_voices if v in visible_voices_config]
+            else:
+                return all_voices # If no visibility is configured, show all
+
         elif self.current_engine == ENGINE_PYTTX3:
             return [v.name for v in self._pyttsx3_voices] if self._pyttsx3_voices else ["default"]
-        elif self.current_engine in self.app_controller.get_sherpa_onnx_engines(): # Updated condition
-            return [self.current_engine] # The engine itself is the "voice"
+            
+        elif self.app_controller and self.current_engine in self.app_controller.get_sherpa_onnx_engines():
+            # If the model is loaded and has speakers, return them.
+            if self._sherpa_tts and self.sherpa_speakers:
+                return self.sherpa_speakers
+            # Otherwise, return the engine name as a placeholder.
+            return [self.current_engine]
+            
         return ["default"]
 
     def get_listen_device_names(self):
